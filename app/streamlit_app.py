@@ -15,7 +15,6 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
-import streamlit.components.v1 as components
 from PIL import Image, ImageOps
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -61,13 +60,11 @@ st.markdown(f"""
     --muted: {PALETTE['muted']};
 }}
 html, body, [class*="css"] {{ font-family: "Source Sans Pro", "Segoe UI", sans-serif; }}
-
 /* Project-themed watermark: a faint smart-building silhouette with a lit
-   window grid + an energy bolt, plus a faint circuit/node pattern. Both are
-   self-contained SVG (no external image, nothing to go missing offline) and
-   sit at very low opacity behind a near-opaque gradient, so they read as a
-   deliberate "smart building energy" motif without ever competing with the
-   content on top of them. */
+   window grid and an energy bolt, self-contained as SVG (no external image
+   to go missing offline). It sits behind a near-opaque gradient at very low
+   opacity, so it reads as a deliberate "smart building energy" motif without
+   ever competing with the content on top of it. */
 .stApp {{
     background:
         linear-gradient(180deg, rgba(244,248,247,.95), rgba(244,248,247,.975) 420px, var(--surface) 900px),
@@ -78,16 +75,27 @@ html, body, [class*="css"] {{ font-family: "Source Sans Pro", "Segoe UI", sans-s
 }}
 .block-container {{ max-width: 1360px; padding-top: 1.4rem; padding-bottom: 3rem; }}
 
+@keyframes fadeSlideIn {{
+    from {{ opacity: 0; transform: translateY(10px); }}
+    to   {{ opacity: 1; transform: translateY(0); }}
+}}
+@keyframes heroGlow {{
+    0%, 100% {{ opacity: .55; }}
+    50%      {{ opacity: 1; }}
+}}
+
 .hero {{
     position: relative; overflow: hidden; border-radius: 20px;
     padding: 30px 34px; margin-bottom: 20px;
     background: linear-gradient(120deg, #0E2A2F 0%, #0F6E5E 100%);
     box-shadow: 0 14px 34px rgba(14,42,47,.20);
+    animation: fadeSlideIn .5s ease both;
 }}
 .hero:before {{
     content: ""; position: absolute; right: -60px; top: -90px;
     width: 240px; height: 240px; border-radius: 50%;
     background: radial-gradient(circle, rgba(255,255,255,.10), transparent 65%);
+    animation: heroGlow 4s ease-in-out infinite;
 }}
 .hero-eyebrow {{ color: rgba(255,255,255,.72); font-size: .82rem; letter-spacing: .02em; margin: 0 0 6px 0; }}
 .hero-title {{ color: #fff; font-size: 1.9rem; font-weight: 700; margin: 0 0 8px 0; line-height: 1.25; }}
@@ -97,15 +105,26 @@ html, body, [class*="css"] {{ font-family: "Source Sans Pro", "Segoe UI", sans-s
     display: inline-flex; align-items: center; gap: 6px; padding: 6px 13px;
     border-radius: 999px; background: rgba(255,255,255,.14); color: #fff;
     font-size: .80rem; border: 1px solid rgba(255,255,255,.20);
+    transition: transform .18s ease, background .18s ease;
 }}
+.hero-badge:hover {{ transform: translateY(-2px); background: rgba(255,255,255,.22); }}
 
 .card {{
     background: var(--card); border: 1px solid var(--line); border-radius: 14px;
     padding: 18px 20px; box-shadow: 0 4px 14px rgba(14,42,47,.05);
+    animation: fadeSlideIn .45s ease both;
+    transition: transform .18s ease, box-shadow .18s ease;
 }}
+.card:hover {{ transform: translateY(-3px); box-shadow: 0 10px 24px rgba(14,42,47,.12); }}
 .stat-card {{
     background: var(--card); border: 1px solid var(--line); border-radius: 14px;
     padding: 16px 18px;
+    animation: fadeSlideIn .45s ease both;
+    transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+}}
+.stat-card:hover {{
+    transform: translateY(-3px); border-color: var(--brand);
+    box-shadow: 0 10px 24px rgba(14,42,47,.12);
 }}
 .stat-label {{ color: var(--muted); font-size: .82rem; margin-bottom: 4px; }}
 .stat-value {{ color: var(--ink); font-size: 1.55rem; font-weight: 700; line-height: 1.1; }}
@@ -137,79 +156,16 @@ div[data-testid="stMetric"] {{ background: var(--card); border: 1px solid var(--
 """, unsafe_allow_html=True)
 
 
-def hero(title: str, subtitle: str) -> None:
+def hero(title: str, subtitle: str, badges: list[str]) -> None:
+    chips = "".join(f'<span class="hero-badge">{b}</span>' for b in badges)
     st.markdown(f"""
     <div class="hero"><div>
         <p class="hero-eyebrow">AI-Based Smart Building Energy Management System</p>
         <p class="hero-title">{title}</p>
         <p class="hero-sub">{subtitle}</p>
+        <div class="hero-badges">{chips}</div>
     </div></div>
     """, unsafe_allow_html=True)
-
-
-def glass_pills(badges: list[str], height: int = 78) -> None:
-    """Interactive glass-pill badge row.
-
-    A thick, lens-like glass pill per badge: the background blurs and bends
-    behind it, a highlight follows the pointer, and the pill tilts toward the
-    cursor and presses down on click. The --mx/--my/--rx/--ry custom
-    properties are registered with @property so the browser can smoothly
-    interpolate them between pointer positions - a single `mousemove`
-    listener per pill updates the target values and CSS does the animating,
-    so there is no per-frame JS animation loop.
-    """
-    items = "".join(f'<div class="pill"><span>{b}</span></div>' for b in badges)
-    html = f"""
-    <style>
-      @property --mx {{ syntax: '<percentage>'; inherits: false; initial-value: 50%; }}
-      @property --my {{ syntax: '<percentage>'; inherits: false; initial-value: 50%; }}
-      @property --rx {{ syntax: '<angle>'; inherits: false; initial-value: 0deg; }}
-      @property --ry {{ syntax: '<angle>'; inherits: false; initial-value: 0deg; }}
-      * {{ box-sizing: border-box; }}
-      body {{ margin: 0; background: transparent; font-family: "Source Sans Pro","Segoe UI",sans-serif; }}
-      .row {{ display: flex; flex-wrap: wrap; gap: 12px; padding: 4px 2px; perspective: 700px; }}
-      .pill {{
-          --mx: 50%; --my: 50%; --rx: 0deg; --ry: 0deg;
-          position: relative; overflow: hidden; cursor: pointer;
-          padding: 10px 20px; border-radius: 999px;
-          color: #fff; font-size: .86rem; font-weight: 600; letter-spacing: .01em;
-          background:
-              radial-gradient(120px circle at var(--mx) var(--my), rgba(255,255,255,.55), transparent 62%),
-              linear-gradient(135deg, rgba(255,255,255,.20), rgba(255,255,255,.04));
-          backdrop-filter: blur(14px) saturate(140%);
-          -webkit-backdrop-filter: blur(14px) saturate(140%);
-          border: 1px solid rgba(255,255,255,.35);
-          box-shadow:
-              inset 0 1px 1px rgba(255,255,255,.55),
-              inset 0 -6px 10px rgba(0,0,0,.18),
-              0 8px 18px rgba(14,42,47,.28);
-          transform: rotateX(var(--rx)) rotateY(var(--ry));
-          transition: --mx .25s ease, --my .25s ease, --rx .18s ease, --ry .18s ease,
-                      box-shadow .18s ease, transform .18s ease;
-      }}
-      .pill:active {{ transform: rotateX(var(--rx)) rotateY(var(--ry)) scale(.95) translateY(1px); }}
-      .pill span {{ position: relative; z-index: 1; text-shadow: 0 1px 2px rgba(0,0,0,.25); }}
-    </style>
-    <div class="row" id="row">{items}</div>
-    <script>
-      document.querySelectorAll('.pill').forEach(function (pill) {{
-        pill.addEventListener('mousemove', function (e) {{
-          var r = pill.getBoundingClientRect();
-          var x = (e.clientX - r.left) / r.width;
-          var y = (e.clientY - r.top) / r.height;
-          pill.style.setProperty('--mx', (x * 100).toFixed(1) + '%');
-          pill.style.setProperty('--my', (y * 100).toFixed(1) + '%');
-          pill.style.setProperty('--ry', ((x - 0.5) * 18).toFixed(1) + 'deg');
-          pill.style.setProperty('--rx', ((0.5 - y) * 18).toFixed(1) + 'deg');
-        }});
-        pill.addEventListener('mouseleave', function () {{
-          pill.style.setProperty('--mx', '50%'); pill.style.setProperty('--my', '50%');
-          pill.style.setProperty('--rx', '0deg'); pill.style.setProperty('--ry', '0deg');
-        }});
-      }});
-    </script>
-    """
-    components.html(html, height=height)
 
 
 def stat_card(label: str, value: str, foot: str = "") -> None:
@@ -234,57 +190,32 @@ def status_badge(status: str) -> str:
 
 # ===========================================================================
 # CACHED LOADERS  (all paths come from common.py - nothing hard-coded here)
-#
-# Every loader's cache key includes the file's last-modified time, so if you
-# re-run a pipeline script and it rewrites a CSV/JSON/checkpoint, the very
-# next rerun of the dashboard reads the new file automatically - no stale
-# "previous output", and no need to restart Streamlit by hand. The sidebar's
-# "Refresh data" button clears everything in one click as a manual fallback.
 # ===========================================================================
-def _mtime(path: Path) -> float:
-    try:
-        return path.stat().st_mtime
-    except FileNotFoundError:
-        return 0.0
-
-
 @st.cache_data
-def _read_csv_cached(path_str: str, mtime: float, parse_dates: tuple | None) -> pd.DataFrame:
-    return pd.read_csv(path_str, parse_dates=list(parse_dates) if parse_dates else None)
-
-
 def load_csv(name: str, parse_dates: list | None = None) -> pd.DataFrame:
     path = REPORTS / name
     if not path.exists():
         return pd.DataFrame()
-    return _read_csv_cached(str(path), _mtime(path), tuple(parse_dates) if parse_dates else None)
+    return pd.read_csv(path, parse_dates=parse_dates)
 
 
 @st.cache_data
-def _read_energy_data_cached(path_str: str, mtime: float) -> pd.DataFrame:
-    df = pd.read_csv(path_str, parse_dates=["timestamp"])
-    df["house_id"] = normalise_id(df["house_id"])
-    return df
-
-
 def load_energy_data() -> pd.DataFrame:
     path = PROCESSED / "energy_model_data.csv"
     if not path.exists():
         return pd.DataFrame()
-    return _read_energy_data_cached(str(path), _mtime(path))
+    df = pd.read_csv(path, parse_dates=["timestamp"])
+    df["house_id"] = normalise_id(df["house_id"])
+    return df
 
 
 @st.cache_data
-def _read_json_cached(path_str: str, mtime: float) -> dict:
-    return load_json(Path(path_str))
-
-
 def load_json_cached(path: Path) -> dict:
-    return _read_json_cached(str(path), _mtime(path))
+    return load_json(path)
 
 
 @st.cache_resource
-def _load_lstm_cached(checkpoint_mtime: float) -> LSTMBundle | None:
+def load_lstm() -> LSTMBundle | None:
     try:
         return load_lstm_checkpoint()
     except Exception as error:
@@ -292,29 +223,20 @@ def _load_lstm_cached(checkpoint_mtime: float) -> LSTMBundle | None:
         return None
 
 
-def load_lstm() -> LSTMBundle | None:
-    return _load_lstm_cached(_mtime(MODELS / FINAL_MODEL_CHECKPOINT))
-
-
 @st.cache_resource
-def _load_yolo_cached(model_mtime: float, model_path: str):
+def load_yolo():
     try:
         from ultralytics import YOLO
-        return YOLO(model_path)
+        path = YOLO_MODEL if YOLO_MODEL.exists() else None
+        if path is None:
+            candidates = list((ROOT / "data" / "yolo" / "reports").rglob("best.pt"))
+            path = max(candidates, key=lambda p: p.stat().st_mtime) if candidates else None
+        if path is None:
+            return None
+        return YOLO(str(path))
     except Exception as error:
         st.session_state["_yolo_error"] = str(error)
         return None
-
-
-def load_yolo():
-    path = YOLO_MODEL if YOLO_MODEL.exists() else None
-    if path is None:
-        candidates = list((ROOT / "data" / "yolo" / "reports").rglob("best.pt"))
-        path = max(candidates, key=lambda p: p.stat().st_mtime) if candidates else None
-    if path is None:
-        st.session_state["_yolo_error"] = "no .pt file found under models/ or data/yolo/reports/"
-        return None
-    return _load_yolo_cached(_mtime(path), str(path))
 
 
 def data_status() -> dict:
@@ -428,12 +350,6 @@ comparison_df = load_csv("all_model_comparison.csv")
 with st.sidebar:
     st.markdown("### ⚡ Smart Energy AI")
     st.caption("MCA Final Project — Sarah Tucker College")
-    if st.button("🔄 Refresh data", use_container_width=True,
-                help="Data refreshes automatically when a file changes. Use this only if "
-                    "you still see old numbers after re-running a pipeline script."):
-        st.cache_data.clear()
-        st.cache_resource.clear()
-        st.rerun()
     st.divider()
 
     st.markdown("**Deployed model**")
@@ -471,12 +387,12 @@ hero(
     "AI-Based Smart Building Energy Management",
     "Deep-learning next-day energy forecasting, explainable AI, and YOLOv8 occupancy "
     "detection combined into one operational dashboard.",
+    [
+        f"Model: {FINAL_MODEL}",
+        f"{energy_df['house_id'].nunique() if not energy_df.empty else '—'} houses",
+        f"{len(energy_df):,} rows" if not energy_df.empty else "no data loaded",
+    ],
 )
-glass_pills([
-    f"Model: {FINAL_MODEL}",
-    f"{energy_df['house_id'].nunique() if not energy_df.empty else '—'} houses",
-    f"{len(energy_df):,} rows" if not energy_df.empty else "no data loaded",
-])
 
 tab_overview, tab_eda, tab_forecast, tab_models, tab_xai, tab_reco, tab_upload, tab_live = st.tabs(
     ["Overview", "Data & EDA", "Future Forecast", "Model Comparison",
@@ -662,40 +578,25 @@ with tab_models:
     else:
         type_colors = {"Machine Learning": PALETTE["blue"], "Deep Learning": PALETTE["brand"],
                       "Hybrid (weighted blend)": PALETTE["amber"]}
-        metric = st.radio("Rank by", ["RMSE", "MAE", "R2", "MAPE"], horizontal=True,
-                          help="RMSE and MAE: lower is better. R2: higher is better. MAPE: lower is better.")
-        available_metrics = [m for m in ["RMSE", "MAE", "R2", "MAPE"] if m in comparison_df.columns]
-        metric = metric if metric in available_metrics else available_metrics[0]
-        ascending = metric != "R2"
-        ranked = comparison_df.sort_values(metric, ascending=ascending).reset_index(drop=True)
-
-        bar_colors = [type_colors.get(t, PALETTE["muted"]) for t in ranked["Type"]]
-        line_colors = [PALETTE["ink"] if d else "rgba(0,0,0,0)" for d in ranked["Deployed"]]
-        hover = [
-            f"<b>{row.Model}</b><br>{row.Type}<br>"
-            f"MAE {row.MAE:.3f} · RMSE {row.RMSE:.3f} · R² {row.R2:.3f}"
-            + (f" · MAPE {row.MAPE:.2f}%" if "MAPE" in ranked.columns and pd.notna(row.MAPE) else "")
-            + ("<br><b>★ Deployed model</b>" if row.Deployed else "")
-            for row in ranked.itertuples()
-        ]
-        fig = go.Figure(go.Bar(
-            x=ranked[metric], y=ranked["Model"], orientation="h",
-            marker=dict(color=bar_colors, line=dict(color=line_colors, width=2.5)),
-            text=[f"{v:.3f}" for v in ranked[metric]], textposition="outside",
-            hovertext=hover, hoverinfo="text",
-        ))
-        fig.update_yaxes(autorange="reversed")
-        fig.update_layout(
-            height=max(320, 46 * len(ranked)), margin=dict(l=10, r=40, t=10, b=10),
-            xaxis_title=f"Test {metric}" + (" (kWh)" if metric in ("RMSE", "MAE") else ""),
-            yaxis_title="", showlegend=False,
-            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        )
+        ranked = comparison_df.sort_values("RMSE")
+        # LSTM (the deployed model) always gets the dark "ink" colour so it is
+        # instantly distinguishable from every other bar, regardless of Type.
+        bar_colors = [PALETTE["ink"] if str(m).strip().upper() == FINAL_MODEL.upper()
+                     else type_colors.get(t, PALETTE["muted"])
+                     for m, t in zip(ranked["Model"], ranked["Type"])]
+        fig = go.Figure(go.Bar(x=ranked["Model"], y=ranked["RMSE"], marker_color=bar_colors,
+                               text=[f"{v:.2f}" for v in ranked["RMSE"]], textposition="outside"))
+        fig.update_layout(height=380, margin=dict(l=10, r=10, t=10, b=10), yaxis_title="Test RMSE (kWh)",
+                          paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
         st.plotly_chart(fig, use_container_width=True)
-        legend_bits = " · ".join(f'<span style="color:{c}">●</span> {t}' for t, c in type_colors.items())
-        st.markdown(f'<div style="font-size:.82rem;color:{PALETTE["muted"]};margin:4px 0 10px;">'
-                   f'{legend_bits} · dark outline = deployed model. Hover a bar for full metrics.</div>',
-                   unsafe_allow_html=True)
+        st.markdown(
+            f'<div style="font-size:.82rem;color:{PALETTE["muted"]};margin:-6px 0 10px;">'
+            f'<span style="color:{PALETTE["ink"]}">⬤</span> {FINAL_MODEL} (deployed) &nbsp;·&nbsp; '
+            f'<span style="color:{PALETTE["blue"]}">⬤</span> Machine Learning &nbsp;·&nbsp; '
+            f'<span style="color:{PALETTE["brand"]}">⬤</span> Deep Learning &nbsp;·&nbsp; '
+            f'<span style="color:{PALETTE["amber"]}">⬤</span> Hybrid</div>',
+            unsafe_allow_html=True,
+        )
 
         show = comparison_df.sort_values("RMSE").copy()
         show["Deployed"] = show["Deployed"].map({True: "✅", False: ""})
@@ -734,24 +635,13 @@ with tab_xai:
         if perm.empty:
             note("reports/permutation_importance.csv not found.", "warn")
         else:
-            show_variability = st.checkbox(
-                "Show variability across the 8 repeats", value=False,
-                help="Each feature is shuffled 8 times; the whisker shows how much the "
-                    "importance score moved across those repeats. A short whisker means "
-                    "a stable, trustworthy ranking; a long one means treat the ranking "
-                    "with caution for that feature.")
             top = perm.head(15).sort_values("importance_mean")
             fig = px.bar(top, x="importance_mean", y="feature", orientation="h",
-                        error_x="importance_std" if show_variability else None)
-            fig.update_traces(marker_color=PALETTE["brand"],
-                              error_x=dict(color=PALETTE["muted"], thickness=1.3, width=3))
+                        error_x="importance_std")
+            fig.update_traces(marker_color=PALETTE["brand"])
             fig.update_layout(height=420, margin=dict(l=10, r=10, t=10, b=10),
-                              xaxis_title="Mean importance (drop in accuracy when shuffled)",
-                              yaxis_title="", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+                              paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
             st.plotly_chart(fig, use_container_width=True)
-            st.caption("Longer bars = the model relies on that feature more. Permutation "
-                      "importance measures the drop in accuracy when a feature's values "
-                      "are randomly shuffled, so larger = more important.")
     with right:
         st.markdown("**SHAP global importance**")
         shap_png = REPORTS / "shap_global_importance.png"

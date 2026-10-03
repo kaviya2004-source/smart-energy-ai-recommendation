@@ -1,0 +1,14 @@
+{
+  "rows": 70941,
+  "columns": 58,
+  "date_start": "2020-06-24 00:00:00",
+  "date_end": "2025-06-16 00:00:00",
+  "houses": 39,
+  "occupancy_present": true,
+  "split_counts": {
+    "train": 49686,
+    "validation": 10647,
+    "test": 10608
+  },
+  "target": "target_next_day_kwh"
+}

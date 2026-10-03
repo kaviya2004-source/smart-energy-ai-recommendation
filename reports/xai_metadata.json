@@ -1,0 +1,10 @@
+{
+  "xai_model": "Gradient Boosting",
+  "xai_methods": [
+    "permutation importance (neg. MAE, 8 repeats)",
+    "SHAP"
+  ],
+  "shap_status": "SHAP plot not created: DLL load failed while importing _vq: An Application Control policy has blocked this file.. Use permutation_importance.csv as the XAI output.",
+  "deployed_prediction_model": "LSTM (deployed, lstm.pt)",
+  "note": "XAI explains the best tabular ML model built on the same engineered features. It shows which inputs drive predictions; it is not a causal explanation and does not open the LSTM itself."
+}

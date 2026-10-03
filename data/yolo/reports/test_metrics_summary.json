@@ -1,0 +1,9 @@
+{
+  "precision": 0.939,
+  "recall": 0.907,
+  "mAP50": 0.962,
+  "mAP50_95": 0.577,
+  "test_images": 75,
+  "test_person_instances": 609,
+  "source": "Ultralytics test evaluation completed 2026-08-16 using training-2/weights/best.pt"
+}

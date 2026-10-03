@@ -1,0 +1,13 @@
+__pycache__/
+.venv/
+data/yolo/raw/
+data/yolo/processed/images/
+data/yolo/processed/labels/
+data/raw/
+runs/
+*.cache
+.streamlit/secrets.toml
+data/yolo/reports/training/
+yolov8n.pt
+models/*.joblib
+data/processed/energy_features.csv

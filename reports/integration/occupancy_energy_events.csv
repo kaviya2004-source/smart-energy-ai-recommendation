@@ -1,0 +1,14 @@
+event_time,house_id,forecast_date,predicted_kwh,energy_status,person_present,person_count,occupancy_level,scenario_optimized_kwh,potential_saving_kwh,saving_percent,source_image
+2026-09-01T10:59:20,1.0,2025-06-17,9.103,Normal,1,6,High occupancy,8.92094,0.18206,2.0,1c82c0e2ba7b_images_relax_3_330_2_jpg.rf.d550b09cc116789115db2edfc8f56c78.jpg
+2026-09-01T19:00:00,2.0,2025-06-17,16.638,Normal,1,27,High occupancy,16.30524,0.33276000000000006,2.0,1c90862e2e6d_images_relaxFaceX_36_2_jpg.rf.5547098a8db83ae6cc16f7fbd51e5bf3.jpg
+2026-09-01T19:00:04,2.0,2025-06-17,16.638,Normal,1,27,High occupancy,16.30524,0.33276000000000006,2.0,1c90862e2e6d_images_relaxFaceX_36_2_jpg.rf.5547098a8db83ae6cc16f7fbd51e5bf3.jpg
+2026-09-02T07:31:44,1.0,2025-06-17,9.103,Normal,1,4,Moderate occupancy,8.64785,0.45515,5.0,3f045a8fd768_images_relax_3_360_2_jpg.rf.a5478fb18e0908d33e95a8c96fd2e6c9.jpg
+2026-09-05T16:11:01,1.0,2025-06-17,9.103,Normal,1,6,High occupancy,8.92094,0.18206,2.0,1c82c0e2ba7b_images_relax_3_330_2_jpg.rf.d550b09cc116789115db2edfc8f56c78.jpg
+2026-09-05T23:17:33,1.0,2025-06-17,7.6894,Normal,1,7,High occupancy,7.535612,0.153788,2.0,6007ad6c6cbd_images_relax_2_480_2_jpg.rf.37072c7981385834b99fd4baa079fa11.jpg
+2026-09-08T17:42:27,1.0,2025-06-17,7.6894,Normal,1,1,Single occupancy,6.92046,0.7689400000000001,10.0,camera-input-2026-09-08T12_12_01.435Z.jpg
+2026-09-08T17:43:29,1.0,2025-06-17,7.6894,Normal,0,0,Empty room,6.15152,1.5378800000000001,20.0,camera-input-2026-09-08T12_13_14.119Z.jpg
+2026-09-08T17:44:19,1.0,2025-06-17,7.6894,Normal,1,1,Single occupancy,6.92046,0.7689400000000001,10.0,camera-input-2026-09-08T12_14_00.031Z.jpg
+2026-09-08T17:45:05,1.0,2025-06-17,7.6894,Normal,0,0,Empty room,6.15152,1.5378800000000001,20.0,camera-input-2026-09-08T12_14_49.856Z.jpg
+2026-09-08T17:46:04,1.0,2025-06-17,7.6894,Normal,1,6,High occupancy,7.535612,0.153788,2.0,1c82c0e2ba7b_images_relax_3_330_2_jpg.rf.d550b09cc116789115db2edfc8f56c78.jpg
+2026-09-18T11:40:20,1.0,2025-06-17,7.6894,Normal,1,4,Moderate occupancy,7.30493,0.38447000000000003,5.0,ee4619793bdd_images_relax_3_450_2_jpg.rf.2bf514c16ea32ea3f1c77a09e139735c.jpg
+2026-09-18T11:41:01,1.0,2025-06-17,7.6894,Normal,1,27,High occupancy,7.535612,0.153788,2.0,1c90862e2e6d_images_relaxFaceX_36_2_jpg.rf.5547098a8db83ae6cc16f7fbd51e5bf3.jpg

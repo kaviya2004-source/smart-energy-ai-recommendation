@@ -1,0 +1,24 @@
+{
+  "final_model": "LSTM",
+  "checkpoint": "models/lstm.pt",
+  "task": "next-day household energy (kWh) forecasting",
+  "test_rows": 10608,
+  "test_metrics": {
+    "MAE": 5.887822954270362,
+    "RMSE": 8.080570577336259,
+    "MAPE": 71.37848335879575,
+    "sMAPE": 29.7942708639183,
+    "R2": 0.6143676783475043
+  },
+  "deep_learning_comparison": {
+    "rows_used": 10608,
+    "rank_by_rmse": 3,
+    "models_compared": 6,
+    "lowest_rmse_model": "7-day moving-average baseline"
+  },
+  "all_model_comparison": {
+    "rank_by_rmse": 1,
+    "models_compared": 7,
+    "lowest_rmse_model": "LSTM"
+  }
+}

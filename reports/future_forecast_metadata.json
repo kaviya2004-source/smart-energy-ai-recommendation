@@ -1,0 +1,31 @@
+{
+  "generated_at": "2026-09-24T10:18:56",
+  "model": "LSTM (models/lstm.pt)",
+  "sequence_days": 7,
+  "last_observed_date": "2025-06-16",
+  "first_forecast_date": "2025-06-17",
+  "last_forecast_date": "2027-12-31",
+  "houses": 39,
+  "rows": 36192,
+  "weather_mode": "climatology",
+  "lag_convention": {
+    "lag1_back": 1,
+    "lag7_back": 7,
+    "rolling_inclusive": false,
+    "detected": {
+      "kwh_lag_1": {
+        "1": 1.0,
+        "0": 0.0015
+      },
+      "kwh_lag_7": {
+        "7": 1.0,
+        "6": 0.0015
+      },
+      "kwh_rolling_7": {
+        "inclusive": 0.0013,
+        "exclusive": 1.0
+      }
+    }
+  },
+  "note": "Recursive multi-day forecasts are scenario projections. Only the next-day forecast is validated on the held-out test set; uncertainty grows with horizon_day."
+}

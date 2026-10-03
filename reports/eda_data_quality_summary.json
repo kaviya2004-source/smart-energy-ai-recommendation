@@ -1,0 +1,23 @@
+{
+  "rows": 70941,
+  "columns": 58,
+  "houses": 39,
+  "date_start": "2020-06-24 00:00:00",
+  "date_end": "2025-06-16 00:00:00",
+  "zero_kwh_records": 89,
+  "zero_kwh_percent": 0.125,
+  "duplicate_records": 0,
+  "duplicate_house_timestamp": 0,
+  "outlier_method": "IQR rule (1.5 x IQR) on kwh",
+  "outlier_lower_bound": -13.225,
+  "outlier_upper_bound": 55.855,
+  "outlier_records": 1344,
+  "outlier_percent": 1.895,
+  "kwh_min": 0.0,
+  "kwh_max": 178.46,
+  "kwh_mean": 23.073,
+  "kwh_median": 21.71,
+  "kwh_std": 13.253,
+  "kwh_skewness": 1.143,
+  "kwh_excess_kurtosis_pandas": 3.265
+}

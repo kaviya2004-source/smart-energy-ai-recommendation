@@ -1,0 +1,15 @@
+{
+  "prediction_model": "LSTM (deployed, lstm.pt)",
+  "alignment": "aligned with offset 0 day(s); coverage 100.0%",
+  "rows": 10608,
+  "status_high_ratio": 1.2,
+  "status_low_ratio": 0.85,
+  "high_kwh_alert": 30.0,
+  "saving_rates": {
+    "High": 0.1,
+    "Normal": 0.05,
+    "Low": 0.02
+  },
+  "saving_formula": "max(0, predicted - 7-day baseline) x assumed_reduction_rate",
+  "note": "Saving is a rule-based assumption, not a measured field result."
+}

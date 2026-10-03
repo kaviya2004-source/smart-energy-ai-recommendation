@@ -1,0 +1,16 @@
+{
+  "LSTM + BiLSTM + CNN-LSTM Hybrid": {
+    "MAE": 5.867558228678355,
+    "RMSE": 8.068795567290698,
+    "MAPE": 67.2438127535128,
+    "sMAPE": 29.676388729847453,
+    "R2": 0.6154907465696036,
+    "model_1": "LSTM",
+    "model_2": "BiLSTM",
+    "model_3": "CNN-LSTM",
+    "weight_1": 0.25,
+    "weight_2": 0.35,
+    "weight_3": 0.4,
+    "validation_RMSE": 7.243056980101469
+  }
+}

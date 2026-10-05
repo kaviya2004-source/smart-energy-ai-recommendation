@@ -1,829 +1,1763 @@
-"""AI Smart Building Energy Management Dashboard.
+"""AI Smart Energy Management Dashboard."""
 
-Single source of truth: every threshold, saving formula and occupancy band
-used here comes from src/common.py. The forecasting model is loaded through
-src/lstm_net.py, so the dashboard always uses the exact same architecture and
-feature list as the training and reporting scripts.
-"""
-from __future__ import annotations
-
-import sys
-from datetime import datetime
 from pathlib import Path
+import sys
+import json
+from datetime import datetime
 
+import numpy as np
 import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
 import streamlit as st
+import torch
+from torch import nn
 from PIL import Image, ImageOps
+import matplotlib.pyplot as plt
 
+# ---------------------------------------------------------------------
+# PATHS
+# ---------------------------------------------------------------------
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(ROOT / "src"))
 
-from common import (  # noqa: E402
-    FINAL_MODEL, FINAL_MODEL_CHECKPOINT, HIGH_KWH_ALERT, MODELS, PROCESSED, REPORTS,
-    STATUS_HIGH_RATIO, STATUS_LOW_RATIO, STATUS_SAVING_RATE, YOLO_CONFIDENCE,
-    YOLO_MODEL, energy_advice, energy_status, forecast_saving_kwh, load_json,
-    normalise_id, occupancy_energy_impact, season_name,
+from common import REPORTS  # noqa: E402
+
+# ---------------------------------------------------------------------
+# PAGE CONFIG
+# ---------------------------------------------------------------------
+st.set_page_config(
+    page_title="AI Smart Energy Management",
+    page_icon="⚡",
+    layout="wide",
 )
-from lstm_net import LSTMBundle, load_lstm_checkpoint  # noqa: E402
-from prepare_data import clean_name  # noqa: E402
-from feature_engineering import engineer  # noqa: E402
 
-# ===========================================================================
-# PAGE CONFIG + THEME
-# ===========================================================================
-st.set_page_config(page_title="Smart Energy AI | Sarah Tucker College", page_icon="🏢", layout="wide")
+st.markdown(
+    """
+    <style>
+        .block-container {
+            max-width: 1400px;
+            padding-top: 1.5rem;
+            padding-bottom: 3rem;
+        }
+        [data-testid="stMetric"] {
+            border-radius: 12px;
+            padding: 12px;
+        }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
-PALETTE = {
-    "ink": "#0E2A2F",
-    "surface": "#F4F8F7",
-    "card": "#FFFFFF",
-    "line": "#D8E3E1",
-    "brand": "#0F6E5E",
-    "brand_soft": "#E3F1EC",
-    "amber": "#C77D2E",
-    "amber_soft": "#FBEFDF",
-    "red": "#B84C3F",
-    "red_soft": "#FBEAE6",
-    "blue": "#2C6E9E",
-    "muted": "#5B7370",
-}
-
-st.markdown(f"""
-<style>
-:root {{
-    --ink: {PALETTE['ink']}; --surface: {PALETTE['surface']}; --card: {PALETTE['card']};
-    --line: {PALETTE['line']}; --brand: {PALETTE['brand']}; --brand-soft: {PALETTE['brand_soft']};
-    --amber: {PALETTE['amber']}; --amber-soft: {PALETTE['amber_soft']};
-    --red: {PALETTE['red']}; --red-soft: {PALETTE['red_soft']}; --blue: {PALETTE['blue']};
-    --muted: {PALETTE['muted']};
-}}
-html, body, [class*="css"] {{ font-family: "Source Sans Pro", "Segoe UI", sans-serif; }}
-/* Project-themed watermark: a faint smart-building silhouette with a lit
-   window grid and an energy bolt, self-contained as SVG (no external image
-   to go missing offline). It sits behind a near-opaque gradient at very low
-   opacity, so it reads as a deliberate "smart building energy" motif without
-   ever competing with the content on top of it. */
-.stApp {{
-    background:
-        linear-gradient(180deg, rgba(244,248,247,.95), rgba(244,248,247,.975) 420px, var(--surface) 900px),
-        url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='620' height='620' viewBox='0 0 620 620'%3E%3Cg opacity='0.055'%3E%3Crect x='70' y='230' width='150' height='340' fill='%230E2A2F'/%3E%3Crect x='235' y='160' width='120' height='410' fill='%230E2A2F'/%3E%3Crect x='370' y='280' width='100' height='290' fill='%230E2A2F'/%3E%3Cg fill='%23F4F8F7'%3E%3Crect x='85' y='250' width='16' height='16'/%3E%3Crect x='112' y='250' width='16' height='16'/%3E%3Crect x='139' y='250' width='16' height='16'/%3E%3Crect x='166' y='250' width='16' height='16'/%3E%3Crect x='193' y='250' width='16' height='16'/%3E%3Crect x='85' y='280' width='16' height='16'/%3E%3Crect x='112' y='280' width='16' height='16'/%3E%3Crect x='139' y='280' width='16' height='16'/%3E%3Crect x='166' y='280' width='16' height='16'/%3E%3Crect x='193' y='280' width='16' height='16'/%3E%3Crect x='85' y='310' width='16' height='16'/%3E%3Crect x='112' y='310' width='16' height='16'/%3E%3Crect x='139' y='310' width='16' height='16'/%3E%3Crect x='166' y='310' width='16' height='16'/%3E%3Crect x='193' y='310' width='16' height='16'/%3E%3Crect x='250' y='185' width='16' height='16'/%3E%3Crect x='277' y='185' width='16' height='16'/%3E%3Crect x='304' y='185' width='16' height='16'/%3E%3Crect x='331' y='185' width='16' height='16'/%3E%3Crect x='250' y='215' width='16' height='16'/%3E%3Crect x='277' y='215' width='16' height='16'/%3E%3Crect x='304' y='215' width='16' height='16'/%3E%3Crect x='331' y='215' width='16' height='16'/%3E%3Crect x='250' y='245' width='16' height='16'/%3E%3Crect x='277' y='245' width='16' height='16'/%3E%3Crect x='304' y='245' width='16' height='16'/%3E%3Crect x='331' y='245' width='16' height='16'/%3E%3Crect x='385' y='300' width='16' height='16'/%3E%3Crect x='412' y='300' width='16' height='16'/%3E%3Crect x='439' y='300' width='16' height='16'/%3E%3Crect x='385' y='330' width='16' height='16'/%3E%3Crect x='412' y='330' width='16' height='16'/%3E%3Crect x='439' y='330' width='16' height='16'/%3E%3C/g%3E%3Cpath d='M305 60 L275 150 L305 150 L285 230 L345 120 L312 120 Z' fill='%23C77D2E'/%3E%3C/g%3E%3Cg fill='none' stroke='%230F6E5E' stroke-opacity='0.09' stroke-width='1.2'%3E%3Cpath d='M20 20h70v70h60V40h70M20 180h40v-40h50v60h40v-80h70M470 450h70v70h60v-50h20M500 560h60v-40h50'/%3E%3Ccircle cx='20' cy='20' r='3.5' fill='%230F6E5E' fill-opacity='.13' stroke='none'/%3E%3Ccircle cx='150' cy='40' r='3.5' fill='%230F6E5E' fill-opacity='.13' stroke='none'/%3E%3Ccircle cx='470' cy='450' r='3.5' fill='%230F6E5E' fill-opacity='.13' stroke='none'/%3E%3Ccircle cx='600' cy='470' r='3.5' fill='%230F6E5E' fill-opacity='.13' stroke='none'/%3E%3C/g%3E%3C/svg%3E") bottom right no-repeat,
-        var(--surface);
-    background-size: auto, min(640px, 60vw), auto;
-    background-attachment: fixed, fixed, fixed;
-}}
-.block-container {{ max-width: 1360px; padding-top: 1.4rem; padding-bottom: 3rem; }}
-
-@keyframes fadeSlideIn {{
-    from {{ opacity: 0; transform: translateY(10px); }}
-    to   {{ opacity: 1; transform: translateY(0); }}
-}}
-@keyframes heroGlow {{
-    0%, 100% {{ opacity: .55; }}
-    50%      {{ opacity: 1; }}
-}}
-
-.hero {{
-    position: relative; overflow: hidden; border-radius: 20px;
-    padding: 30px 34px; margin-bottom: 20px;
-    background: linear-gradient(120deg, #0E2A2F 0%, #0F6E5E 100%);
-    box-shadow: 0 14px 34px rgba(14,42,47,.20);
-    animation: fadeSlideIn .5s ease both;
-}}
-.hero:before {{
-    content: ""; position: absolute; right: -60px; top: -90px;
-    width: 240px; height: 240px; border-radius: 50%;
-    background: radial-gradient(circle, rgba(255,255,255,.10), transparent 65%);
-    animation: heroGlow 4s ease-in-out infinite;
-}}
-.hero-eyebrow {{ color: rgba(255,255,255,.72); font-size: .82rem; letter-spacing: .02em; margin: 0 0 6px 0; }}
-.hero-title {{ color: #fff; font-size: 1.9rem; font-weight: 700; margin: 0 0 8px 0; line-height: 1.25; }}
-.hero-sub {{ color: rgba(255,255,255,.86); font-size: .97rem; max-width: 760px; margin: 0; line-height: 1.55; }}
-.hero-badges {{ margin-top: 16px; display: flex; gap: 10px; flex-wrap: wrap; }}
-.hero-badge {{
-    display: inline-flex; align-items: center; gap: 6px; padding: 6px 13px;
-    border-radius: 999px; background: rgba(255,255,255,.14); color: #fff;
-    font-size: .80rem; border: 1px solid rgba(255,255,255,.20);
-    transition: transform .18s ease, background .18s ease;
-}}
-.hero-badge:hover {{ transform: translateY(-2px); background: rgba(255,255,255,.22); }}
-
-.card {{
-    background: var(--card); border: 1px solid var(--line); border-radius: 14px;
-    padding: 18px 20px; box-shadow: 0 4px 14px rgba(14,42,47,.05);
-    animation: fadeSlideIn .45s ease both;
-    transition: transform .18s ease, box-shadow .18s ease;
-}}
-.card:hover {{ transform: translateY(-3px); box-shadow: 0 10px 24px rgba(14,42,47,.12); }}
-.stat-card {{
-    background: var(--card); border: 1px solid var(--line); border-radius: 14px;
-    padding: 16px 18px;
-    animation: fadeSlideIn .45s ease both;
-    transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
-}}
-.stat-card:hover {{
-    transform: translateY(-3px); border-color: var(--brand);
-    box-shadow: 0 10px 24px rgba(14,42,47,.12);
-}}
-.stat-label {{ color: var(--muted); font-size: .82rem; margin-bottom: 4px; }}
-.stat-value {{ color: var(--ink); font-size: 1.55rem; font-weight: 700; line-height: 1.1; }}
-.stat-foot {{ color: var(--muted); font-size: .78rem; margin-top: 4px; }}
-
-.note {{
-    border-radius: 12px; padding: 12px 16px; font-size: .88rem; line-height: 1.5;
-    border-left: 4px solid var(--blue); background: #EAF2F8; color: var(--ink);
-}}
-.note-warn {{ border-left-color: var(--amber); background: var(--amber-soft); }}
-.note-bad {{ border-left-color: var(--red); background: var(--red-soft); }}
-
-.badge {{
-    display: inline-block; padding: 3px 11px; border-radius: 999px; font-size: .78rem; font-weight: 600;
-}}
-.badge-high {{ background: var(--red-soft); color: var(--red); }}
-.badge-normal {{ background: var(--brand-soft); color: var(--brand); }}
-.badge-low {{ background: #E7EEF6; color: var(--blue); }}
-
-.reco-item {{
-    padding: 11px 14px; border-radius: 10px; margin: 7px 0;
-    background: var(--amber-soft); border-left: 4px solid var(--amber); font-size: .90rem; color: var(--ink);
-}}
-
-div[data-testid="stMetric"] {{ background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px; }}
-.stTabs [data-baseweb="tab-list"] {{ gap: 4px; }}
-.stTabs [data-baseweb="tab"] {{ border-radius: 10px 10px 0 0; padding: 8px 16px; }}
-</style>
-""", unsafe_allow_html=True)
-
-
-def hero(title: str, subtitle: str, badges: list[str]) -> None:
-    chips = "".join(f'<span class="hero-badge">{b}</span>' for b in badges)
-    st.markdown(f"""
-    <div class="hero"><div>
-        <p class="hero-eyebrow">AI-Based Smart Building Energy Management System</p>
-        <p class="hero-title">{title}</p>
-        <p class="hero-sub">{subtitle}</p>
-        <div class="hero-badges">{chips}</div>
-    </div></div>
-    """, unsafe_allow_html=True)
-
-
-def stat_card(label: str, value: str, foot: str = "") -> None:
-    st.markdown(f"""
-    <div class="stat-card">
-        <div class="stat-label">{label}</div>
-        <div class="stat-value">{value}</div>
-        <div class="stat-foot">{foot}</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-
-def note(text: str, kind: str = "info") -> None:
-    cls = {"warn": "note-warn", "bad": "note-bad"}.get(kind, "")
-    st.markdown(f'<div class="note {cls}">{text}</div>', unsafe_allow_html=True)
-
-
-def status_badge(status: str) -> str:
-    cls = {"High": "badge-high", "Normal": "badge-normal", "Low": "badge-low"}.get(status, "badge-normal")
-    return f'<span class="badge {cls}">{status}</span>'
-
-
-# ===========================================================================
-# CACHED LOADERS  (all paths come from common.py - nothing hard-coded here)
-# ===========================================================================
+# ---------------------------------------------------------------------
+# LOADERS
+# ---------------------------------------------------------------------
 @st.cache_data
-def load_csv(name: str, parse_dates: list | None = None) -> pd.DataFrame:
+def load_csv(name: str) -> pd.DataFrame:
     path = REPORTS / name
     if not path.exists():
         return pd.DataFrame()
+
+    parse_dates = None
+    if "prediction" in name or name == "recommendations.csv":
+        parse_dates = ["timestamp"]
+
     return pd.read_csv(path, parse_dates=parse_dates)
 
 
 @st.cache_data
 def load_energy_data() -> pd.DataFrame:
-    path = PROCESSED / "energy_model_data.csv"
-    if not path.exists():
-        return pd.DataFrame()
-    df = pd.read_csv(path, parse_dates=["timestamp"])
-    df["house_id"] = normalise_id(df["house_id"])
+    return pd.read_csv(
+        ROOT / "data" / "processed" / "energy_model_data.csv",
+        parse_dates=["timestamp"],
+    )
+
+
+@st.cache_resource
+def load_yolo_model():
+    from ultralytics import YOLO
+    return YOLO(ROOT / "models" / "yolo_person_detector.pt")
+
+
+# ---------------------------------------------------------------------
+# HELPERS
+# ---------------------------------------------------------------------
+def occupancy_advice(person_count: int, energy_status: str):
+    if person_count == 0:
+        return (
+            "Empty room",
+            "No person detected. After a safe delay, switch non-critical "
+            "lights and standby appliances to energy-saving mode. Do not "
+            "switch off safety-critical devices.",
+        )
+
+    if person_count == 1:
+        return (
+            "Single occupancy",
+            "One person detected. Maintain essential comfort; use task "
+            "lighting and avoid unnecessary appliance use.",
+        )
+
+    if person_count <= 4:
+        return (
+            "Moderate occupancy",
+            "Multiple people detected. Keep ventilation and comfort active; "
+            "optimise AC set point to 24–26°C and avoid non-essential loads.",
+        )
+
+    if energy_status == "High":
+        return (
+            "High occupancy",
+            "High person count and high predicted energy use. Keep "
+            "ventilation and safety systems active, but postpone "
+            "non-essential high-load appliances.",
+        )
+
+    return (
+        "High occupancy",
+        "High person count detected. Prioritise comfort, ventilation and "
+        "safety; use efficient lighting and avoid unnecessary high-load appliances.",
+    )
+
+
+def safe_number(value, default=0.0):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def clear_yolo_recommendation(person_count: int, energy_status: str, predicted_kwh: float):
+    if person_count == 0:
+        occupancy_text = (
+            "No people detected. After a short safety delay, switch off "
+            "non-essential lights, AC and standby appliances."
+        )
+    elif person_count <= 2:
+        occupancy_text = (
+            "Low occupancy. Keep essential comfort systems active and "
+            "switch off devices that are not being used."
+        )
+    elif person_count <= 4:
+        occupancy_text = (
+            "Moderate occupancy. Keep ventilation/comfort active, use "
+            "efficient lighting and avoid unnecessary high-load appliances."
+        )
+    else:
+        occupancy_text = (
+            "High occupancy. Keep ventilation and safety systems active, "
+            "but avoid unnecessary high-load equipment and optimise AC usage."
+        )
+
+    if energy_status == "High":
+        energy_text = (
+            f"Predicted energy is high ({predicted_kwh:.2f} kWh), so prioritise "
+            "load reduction without affecting safety or occupant comfort."
+        )
+    elif energy_status == "Low":
+        energy_text = (
+            f"Predicted energy is low ({predicted_kwh:.2f} kWh); maintain the "
+            "current efficient usage pattern."
+        )
+    else:
+        energy_text = (
+            f"Predicted energy is normal ({predicted_kwh:.2f} kWh); continue "
+            "normal monitoring and avoid idle loads."
+        )
+
+    return occupancy_text + " " + energy_text
+
+
+
+# ---------------------------------------------------------------------
+# FINAL LSTM + NEW ELECTRICITY DATASET UPLOAD
+# ---------------------------------------------------------------------
+
+class LSTMNet(nn.Module):
+    def __init__(self, n_features, head_hidden=32, extra_dropout=False):
+        super().__init__()
+        self.seq = nn.LSTM(
+            n_features,
+            96,
+            num_layers=2,
+            dropout=.20,
+            batch_first=True,
+        )
+        layers = [
+            nn.LayerNorm(96),
+            nn.Dropout(.15),
+            nn.Linear(96, head_hidden),
+            nn.ReLU(),
+        ]
+        if extra_dropout:
+            layers.append(nn.Dropout(.15))
+        layers.append(nn.Linear(head_hidden, 1))
+        self.head = nn.Sequential(*layers)
+
+    def forward(self, x):
+        return self.head(self.seq(x)[0][:, -1]).squeeze(1)
+
+
+@st.cache_resource
+def load_lstm_model():
+    p = ROOT / "models" / "lstm.pt"
+    if not p.exists():
+        raise FileNotFoundError("models/lstm.pt not found")
+
+    ck = torch.load(p, map_location="cpu", weights_only=False)
+    state = ck["state_dict"]
+    features = ck["features"]
+    scaler = ck["scaler"]
+    seq_days = int(ck.get("sequence_days", 7))
+
+    # Detect the exact saved head instead of assuming a newer architecture.
+    # Current train_dl.py uses head.2 = 32 and head.4 = final layer.
+    # The existing checkpoint may use head.2 = 64 and head.5 = final layer.
+    head2 = state.get("head.2.weight")
+    has_head5 = "head.5.weight" in state
+
+    if head2 is None:
+        raise RuntimeError(
+            "The saved LSTM checkpoint is missing head.2.weight. "
+            "Please check models/lstm.pt."
+        )
+
+    head_hidden = int(head2.shape[0])
+    model = LSTMNet(
+        len(features),
+        head_hidden=head_hidden,
+        extra_dropout=has_head5,
+    )
+
+    model.load_state_dict(state, strict=True)
+    model.eval()
+    return model, features, scaler, seq_days
+
+
+def read_uploaded_energy_file(uploaded_file):
+    name = uploaded_file.name.lower()
+    if name.endswith(".csv"):
+        return pd.read_csv(uploaded_file)
+    if name.endswith(".xlsx"):
+        return pd.read_excel(uploaded_file)
+    if name.endswith(".xls"):
+        return pd.read_excel(uploaded_file)
+    raise ValueError("Please upload an electricity/energy CSV, XLSX or XLS file.")
+
+
+def standardize_uploaded_columns(df):
+    df = df.copy()
+    df.columns = [
+        str(c).strip().lower().replace(" ", "_").replace("-", "_")
+        for c in df.columns
+    ]
+
+    # Household Power Consumption dataset:
+    # Date + Time + Global_active_power (kW, one-minute interval).
+    if "date" in df.columns and "time" in df.columns and "timestamp" not in df.columns:
+        df["timestamp"] = (
+            df["date"].astype(str).str.strip()
+            + " "
+            + df["time"].astype(str).str.strip()
+        )
+
+    aliases = {
+        "datetime": "timestamp",
+        "date_time": "timestamp",
+        "energy": "kwh",
+        "electricity": "kwh",
+        "energy_consumption": "kwh",
+        "energy_consumption_kwh": "kwh",
+        "power_consumption": "kwh",
+        "power": "kwh",
+        "global_active_power": "global_active_power",
+        "house": "house_id",
+        "houseid": "house_id",
+        "home_id": "house_id",
+        "people": "occupancy",
+        "persons": "occupancy",
+        "occupants": "occupancy",
+        "occupancy_count": "occupancy",
+        "temperature": "airtc_mean",
+        "temp": "airtc_mean",
+        "humidity": "rh_mean",
+        "relative_humidity": "rh_mean",
+        "pressure": "bp_mbar_mean",
+        "air_pressure": "bp_mbar_mean",
+        "wind_speed": "ws_ms_avg_mean",
+        "solar": "slrkw_avg_mean",
+        "solar_radiation": "slrkw_avg_mean",
+    }
+
+    df = df.rename(columns={c: aliases[c] for c in df.columns if c in aliases})
+
+    # If the file has Global_active_power, convert kW sampled every minute
+    # into per-record kWh. This avoids treating kW as kWh.
+    if "kwh" not in df.columns and "global_active_power" in df.columns:
+        df["kwh"] = pd.to_numeric(
+            df["global_active_power"].replace("?", np.nan),
+            errors="coerce",
+        ) / 60.0
+
     return df
 
 
-@st.cache_data
-def load_json_cached(path: Path) -> dict:
-    return load_json(path)
+def prepare_uploaded_energy_data(df, training_df, model_features):
+    df = standardize_uploaded_columns(df)
 
+    if "timestamp" not in df.columns:
+        raise ValueError(
+            "This file needs a date/time column. "
+            "Examples: timestamp, datetime, or Date + Time."
+        )
 
-@st.cache_resource
-def load_lstm() -> LSTMBundle | None:
-    try:
-        return load_lstm_checkpoint()
-    except Exception as error:
-        st.session_state["_lstm_error"] = str(error)
-        return None
-
-
-@st.cache_resource
-def load_yolo():
-    try:
-        from ultralytics import YOLO
-        path = YOLO_MODEL if YOLO_MODEL.exists() else None
-        if path is None:
-            candidates = list((ROOT / "data" / "yolo" / "reports").rglob("best.pt"))
-            path = max(candidates, key=lambda p: p.stat().st_mtime) if candidates else None
-        if path is None:
-            return None
-        return YOLO(str(path))
-    except Exception as error:
-        st.session_state["_yolo_error"] = str(error)
-        return None
-
-
-def data_status() -> dict:
-    """Which pipeline outputs exist, for the sidebar status list."""
-    return {
-        "Processed dataset": (PROCESSED / "energy_model_data.csv").exists(),
-        "LSTM checkpoint": (MODELS / FINAL_MODEL_CHECKPOINT).exists(),
-        "Model comparison": (REPORTS / "all_model_comparison.csv").exists(),
-        "Recommendations": (REPORTS / "recommendations.csv").exists(),
-        "Future forecast": (REPORTS / "future_energy_forecasts.csv").exists(),
-        "XAI outputs": (REPORTS / "permutation_importance.csv").exists(),
-        "YOLO model": YOLO_MODEL.exists(),
-    }
-
-
-# ===========================================================================
-# PREDICTION HELPERS
-# ===========================================================================
-def build_prediction_window(raw: pd.DataFrame, bundle: LSTMBundle, house_id: str | None = None):
-    """Turn a raw uploaded CSV into the most recent valid input window.
-
-    Reuses the exact lag/temporal formulas from prepare_data.py and the exact
-    engineer() function from feature_engineering.py, so a prediction made here
-    is computed the same way as during training - nothing is approximated.
-    Returns (window_df, meta_dict) or raises ValueError with a clear reason.
-    """
-    df = raw.rename(columns=clean_name).copy()
-    for column in ("timestamp", "house_id", "kwh"):
-        if column not in df.columns:
-            raise ValueError(f"Required column '{column}' not found after standardising headers.")
+    if "kwh" not in df.columns:
+        raise ValueError(
+            "This file needs an electricity/energy column. "
+            "Examples: kWh, energy, electricity, power, or Global_active_power."
+        )
 
     df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
-    df["house_id"] = normalise_id(df["house_id"])
     df["kwh"] = pd.to_numeric(df["kwh"], errors="coerce")
-    df = df.dropna(subset=["timestamp", "house_id", "kwh"])
-    df = df.drop_duplicates(subset=["house_id", "timestamp"]).sort_values(["house_id", "timestamp"])
+    df = df.dropna(subset=["timestamp", "kwh"])
 
-    if house_id is not None:
-        df = df[df["house_id"] == str(house_id)]
     if df.empty:
-        raise ValueError("No valid rows for the selected house after cleaning.")
-    if df["house_id"].nunique() > 1 and house_id is None:
-        raise ValueError("The file has more than one house_id; select a house to predict for.")
+        raise ValueError("No valid electricity records were found in the uploaded file.")
+
+    if "house_id" not in df.columns:
+        df["house_id"] = 1
+
+    df["house_id"] = pd.to_numeric(df["house_id"], errors="coerce").fillna(1)
+    df = df.sort_values(["house_id", "timestamp"]).reset_index(drop=True)
+
+    # If this is a minute-level Household Power Consumption file,
+    # convert the minute kWh values into daily household energy.
+    if "global_active_power" in df.columns:
+        daily = (
+            df.assign(day=df["timestamp"].dt.floor("D"))
+              .groupby(["house_id", "day"], as_index=False)["kwh"]
+              .sum()
+              .rename(columns={"day": "timestamp"})
+        )
+        df = daily.sort_values(["house_id", "timestamp"]).reset_index(drop=True)
 
     df["year"] = df["timestamp"].dt.year
     df["month"] = df["timestamp"].dt.month
-    df["day_of_month"] = df["timestamp"].dt.day
     df["day_of_week"] = df["timestamp"].dt.dayofweek
-    df["day_of_year"] = df["timestamp"].dt.dayofyear
     df["is_weekend"] = (df["day_of_week"] >= 5).astype(int)
+    df["day_of_year"] = df["timestamp"].dt.dayofyear
+    df["week_of_year"] = df["timestamp"].dt.isocalendar().week.astype(int)
+    df["quarter"] = df["timestamp"].dt.quarter
+
+    df["season"] = df["month"].map({
+        12:1, 1:1, 2:1, 3:2, 4:2, 5:2,
+        6:3, 7:3, 8:3, 9:3, 10:4, 11:4
+    })
+
+    df["month_sin"] = np.sin(2*np.pi*df["month"]/12)
+    df["month_cos"] = np.cos(2*np.pi*df["month"]/12)
+    df["day_of_week_sin"] = np.sin(2*np.pi*df["day_of_week"]/7)
+    df["day_of_week_cos"] = np.cos(2*np.pi*df["day_of_week"]/7)
+
     df["kwh_lag_1"] = df.groupby("house_id")["kwh"].shift(1)
     df["kwh_lag_7"] = df.groupby("house_id")["kwh"].shift(7)
-    df["kwh_rolling_7"] = df.groupby("house_id")["kwh"].transform(
-        lambda s: s.shift(1).rolling(7, min_periods=3).mean())
+    df["kwh_rolling_7"] = (
+        df.groupby("house_id")["kwh"]
+        .transform(lambda x: x.rolling(7, min_periods=1).mean())
+    )
 
-    df, _ = engineer(df)
-    df = df.dropna(subset=["kwh_lag_1", "kwh_lag_7", "kwh_rolling_7"])
+    for feature in model_features:
+        if feature not in df.columns:
+            if feature in training_df.columns:
+                value = pd.to_numeric(training_df[feature], errors="coerce").median()
+                if pd.isna(value):
+                    mode = training_df[feature].mode()
+                    value = mode.iloc[0] if len(mode) else 0
+                df[feature] = value
+            else:
+                df[feature] = 0
 
-    sequence_days = bundle.sequence_days
-    if len(df) < sequence_days:
+        df[feature] = pd.to_numeric(df[feature], errors="coerce")
+
+        if feature in training_df.columns:
+            med = pd.to_numeric(training_df[feature], errors="coerce").median()
+            med = 0 if pd.isna(med) else med
+        else:
+            med = 0
+
+        df[feature] = df[feature].fillna(med)
+
+    return df
+
+
+def predict_uploaded_energy(df, model, model_features, scaler, sequence_days):
+    rows = []
+
+    for house_id, group in df.groupby("house_id"):
+        group = group.sort_values("timestamp").copy()
+
+        # The deployed LSTM uses a 7-step sequence. For small demo uploads
+        # (such as a 5-row sample shown to a guide), pad the beginning by
+        # repeating the earliest available row instead of rejecting the file.
+        if len(group) < sequence_days:
+            if len(group) == 0:
+                continue
+            pad_count = sequence_days - len(group)
+            first_row = group.iloc[[0]].copy()
+            padding = pd.concat([first_row] * pad_count, ignore_index=True)
+            group_for_model = pd.concat([padding, group], ignore_index=True)
+        else:
+            group_for_model = group
+
+        x = scaler.transform(group_for_model[model_features]).astype(np.float32)
+        sequence = x[-sequence_days:]
+
+        with torch.no_grad():
+            prediction = max(
+                0.0,
+                float(model(torch.tensor(sequence).unsqueeze(0)).item())
+            )
+
+        latest = group.iloc[-1]
+
+        rows.append({
+            "house_id": house_id,
+            "last_timestamp": latest["timestamp"],
+            "latest_actual_kwh": float(latest["kwh"]),
+            "predicted_next_day_kwh": prediction
+        })
+
+    if not rows:
         raise ValueError(
-            f"Only {len(df)} usable day(s) after preparing lag features; the model needs "
-            f"{sequence_days} consecutive days (upload at least {sequence_days + 7} raw rows)."
+            "No valid electricity records were found for prediction."
         )
 
-    missing = [f for f in bundle.features if f not in df.columns]
-    if missing:
-        raise ValueError(
-            "The uploaded file is missing columns the model needs and none were invented: "
-            + ", ".join(missing)
+    return pd.DataFrame(rows)
+
+
+def upload_energy_recommendation(result, training_df):
+    mean_energy = float(training_df["kwh"].mean())
+
+    def status(value):
+        if value > mean_energy * 1.20:
+            return "High"
+        if value < mean_energy * 0.80:
+            return "Low"
+        return "Normal"
+
+    result["energy_status"] = result["predicted_next_day_kwh"].apply(status)
+
+    def recommendation(row):
+        predicted = float(row["predicted_next_day_kwh"])
+        if row["energy_status"] == "High":
+            return (
+                f"High energy expected ({predicted:.2f} kWh). "
+                "Action: switch off unused lights/devices, reduce unnecessary appliance use, "
+                "and optimise AC/high-load equipment. Recheck after the next reading."
+            )
+        if row["energy_status"] == "Low":
+            return (
+                f"Low energy expected ({predicted:.2f} kWh). "
+                "Action: current usage is efficient; keep essential devices only "
+                "and continue monitoring."
+            )
+        return (
+            f"Normal energy expected ({predicted:.2f} kWh). "
+            "Action: maintain normal usage, switch off idle devices, "
+            "and monitor for sudden increases."
         )
 
-    window = df.tail(sequence_days)
-    gap_days = int((window["timestamp"].iloc[-1] - window["timestamp"].iloc[0]).days)
-    meta = {
-        "house_id": window["house_id"].iloc[-1],
-        "window_start": window["timestamp"].iloc[0],
-        "window_end": window["timestamp"].iloc[-1],
-        "consecutive": gap_days == sequence_days - 1,
-        "baseline_kwh": float(window["kwh"].tail(7).mean()) if len(window) >= 1 else None,
-        "rolling_7": float(window["kwh_rolling_7"].iloc[-1]),
-    }
-    return window, meta
+    result["recommendation"] = result.apply(recommendation, axis=1)
+    return result
 
 
-def render_recommendation_block(prediction: float, baseline: float, extra: list[str] | None = None) -> None:
-    status = energy_status(prediction, baseline)
-    saving = forecast_saving_kwh(prediction, baseline, status)
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        stat_card("Predicted next-day energy", f"{prediction:.2f} kWh")
-    with c2:
-        st.markdown(f"**Status:** {status_badge(status)}", unsafe_allow_html=True)
-        stat_card("7-day baseline", f"{baseline:.2f} kWh")
-    with c3:
-        stat_card("Assumed saving opportunity", f"{saving:.2f} kWh",
-                  f"{STATUS_SAVING_RATE[status]*100:.0f}% of the excess above baseline")
-    st.markdown(f'<div class="reco-item">{energy_advice(status, prediction)}</div>', unsafe_allow_html=True)
-    for line in (extra or []):
-        st.markdown(f'<div class="reco-item">{line}</div>', unsafe_allow_html=True)
-    note("This is a rule-based estimate for planning purposes, not a measured field result.")
+def show_colored_bar_chart(series, title, ylabel):
+    values = series.dropna()
+    if values.empty:
+        st.info("No chart data available.")
+        return
+    fig, ax = plt.subplots(figsize=(9, 4))
+    bars = ax.bar(
+        values.index.astype(str),
+        values.values,
+        color=(
+            ["#3498db", "#e74c3c", "#2ecc71", "#f39c12", "#9b59b6", "#1abc9c"]
+            if len(values) <= 6
+            else "#3498db"
+        ),
+    )
+    ax.set_title(title, fontweight="bold")
+    ax.set_ylabel(ylabel)
+    ax.grid(axis="y", alpha=0.22)
+    for bar in bars:
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height(),
+            f"{bar.get_height():.1f}",
+            ha="center",
+            va="bottom",
+            fontsize=9,
+        )
+    fig.tight_layout()
+    st.pyplot(fig, clear_figure=True)
 
 
-# ===========================================================================
+def show_colorful_historical_charts(filtered_energy):
+    if filtered_energy.empty:
+        return
+
+    t = filtered_energy.copy()
+    t["year_label"] = t["timestamp"].dt.year.astype(str)
+    t["month_label"] = t["timestamp"].dt.to_period("M").astype(str)
+    t["season"] = t["timestamp"].dt.month.map({
+        12:"Winter", 1:"Winter", 2:"Winter",
+        3:"Summer", 4:"Summer", 5:"Summer",
+        6:"Monsoon", 7:"Monsoon", 8:"Monsoon", 9:"Monsoon",
+        10:"Post-monsoon", 11:"Post-monsoon"
+    })
+
+    daily = t.groupby("timestamp")["kwh"].mean()
+    monthly = t.groupby("month_label")["kwh"].mean()
+    yearly = t.groupby("year_label")["kwh"].mean()
+    seasonal = (
+        t.groupby("season")["kwh"].mean()
+        .reindex(["Winter", "Summer", "Monsoon", "Post-monsoon"])
+        .dropna()
+    )
+
+    a, b = st.columns(2)
+
+    with a:
+        st.subheader("Monthly Energy")
+        fig, ax = plt.subplots(figsize=(8, 4))
+        ax.plot(monthly.index, monthly.values, color="#3498db", marker="o", linewidth=2)
+        ax.tick_params(axis="x", rotation=60)
+        ax.set_ylabel("Mean kWh")
+        ax.grid(alpha=.25)
+        fig.tight_layout()
+        st.pyplot(fig, clear_figure=True)
+
+    with b:
+        st.subheader("Yearly Energy")
+        fig, ax = plt.subplots(figsize=(8, 4))
+        ax.bar(yearly.index, yearly.values, color="#9b59b6")
+        ax.set_ylabel("Mean kWh")
+        ax.grid(axis="y", alpha=.25)
+        fig.tight_layout()
+        st.pyplot(fig, clear_figure=True)
+
+    st.subheader("Seasonal Energy")
+    fig, ax = plt.subplots(figsize=(10, 4))
+    ax.bar(
+        seasonal.index,
+        seasonal.values,
+        color=["#3498db", "#e74c3c", "#2ecc71", "#f39c12"]
+    )
+    ax.set_ylabel("Mean kWh")
+    ax.grid(axis="y", alpha=.25)
+    fig.tight_layout()
+    st.pyplot(fig, clear_figure=True)
+
+    st.subheader("Daily Energy Trend")
+    fig, ax = plt.subplots(figsize=(12, 4))
+    ax.plot(daily.index, daily.values, color="#1abc9c", linewidth=1.8)
+    ax.set_ylabel("Mean kWh")
+    ax.grid(alpha=.25)
+    fig.tight_layout()
+    st.pyplot(fig, clear_figure=True)
+
+
+# ---------------------------------------------------------------------
+# REQUIRED REPORTS
+# ---------------------------------------------------------------------
+required = [
+    "all_model_comparison.csv",
+    "recommendations.csv",
+]
+
+missing = [name for name in required if not (REPORTS / name).exists()]
+
+if missing:
+    st.error(
+        "Required energy reports are missing: "
+        + ", ".join(missing)
+        + ". Run the existing energy pipeline first."
+    )
+    st.stop()
+
+# ---------------------------------------------------------------------
+# DATA
+# ---------------------------------------------------------------------
+metrics = load_csv("all_model_comparison.csv")
+recommendations = load_csv("recommendations.csv")
+energy = load_energy_data()
+
+importance_path = REPORTS / "permutation_importance.csv"
+importance = (
+    pd.read_csv(importance_path)
+    if importance_path.exists()
+    else pd.DataFrame()
+)
+
+future_path = REPORTS / "future_energy_forecasts.csv"
+future_forecasts = (
+    pd.read_csv(future_path, parse_dates=["forecast_date"])
+    if future_path.exists()
+    else pd.DataFrame()
+)
+
+yolo_reports = ROOT / "data" / "yolo" / "reports"
+yolo_metric_path = yolo_reports / "test_metrics_summary.json"
+yolo_metrics = (
+    json.loads(yolo_metric_path.read_text(encoding="utf-8"))
+    if yolo_metric_path.exists()
+    else None
+)
+
+metrics = metrics.sort_values("RMSE").reset_index(drop=True)
+lstm_rows = metrics[metrics["Model"].astype(str).str.upper().eq("LSTM")]
+
+# LSTM is the final deployed deep-learning model.
+if not lstm_rows.empty:
+    best = lstm_rows.iloc[0]
+    LSTM_RMSE = safe_number(best["RMSE"])
+else:
+    best = metrics.iloc[0]
+    LSTM_RMSE = None
+
+# ---------------------------------------------------------------------
+# HEADER
+# ---------------------------------------------------------------------
+st.title("⚡ AI Smart Energy Management")
+st.caption(
+    "Energy forecasting • Future projection • Explainable AI • "
+    "YOLO human detection • Energy-saving recommendations"
+)
+
+st.info(
+    f"Final deployed model: **{best.Model}** — selected using the "
+    f"lowest chronological held-out test RMSE."
+)
+
+# ---------------------------------------------------------------------
 # SIDEBAR
-# ===========================================================================
-energy_df = load_energy_data()
-final_model_info = load_json_cached(REPORTS / "final_model.json")
-comparison_df = load_csv("all_model_comparison.csv")
+# ---------------------------------------------------------------------
+if "forecast_view" not in st.session_state:
+    st.session_state["forecast_view"] = "All Data"
 
 with st.sidebar:
-    st.markdown("### ⚡ Smart Energy AI")
-    st.caption("MCA Final Project — Sarah Tucker College")
+    st.title("⚡ Energy AI")
+    st.caption("Smart Building Energy Management")
+
+    # 1) Module definitions FIRST
+    st.divider()
+    st.subheader("Module Guide")
+    st.caption("Overview — quick summary of energy usage and prediction results.")
+    st.caption("EDA — analyzes historical monthly, yearly and seasonal energy patterns.")
+    st.caption("Future Forecast — predicts future energy consumption for selected periods.")
+    st.caption("Model Comparison — compares ML and Deep Learning model performance.")
+    st.caption("Explainable AI — identifies the features influencing energy prediction.")
+    st.caption("Recommendations — gives clear actions to reduce unnecessary energy use.")
+    st.caption("New Dataset Upload — uploads electricity data and generates an LSTM prediction.")
+    st.caption("Live Energy + YOLO — combines energy prediction with human-presence detection.")
+    st.caption("YOLO Human Detection — detects people and gives occupancy-aware energy advice.")
+
+    # 2) Forecast/Data View filter
+    st.divider()
+    st.subheader("Forecast / Data View")
+
+    if "forecast_view" not in st.session_state:
+        st.session_state["forecast_view"] = "All Data"
+
+    for option in ["All Data", "7-Day", "30-Day", "2026", "2027"]:
+        if st.button(
+            option,
+            key=f"sidebar_view_{option.replace('-', '_').replace(' ', '_')}",
+            use_container_width=True,
+            type="primary" if st.session_state["forecast_view"] == option else "secondary",
+        ):
+            st.session_state["forecast_view"] = option
+            st.rerun()
+
+    # 3) Year filter
+    st.divider()
+    st.subheader("Year Filter")
+    years = sorted(
+        pd.to_datetime(energy["timestamp"], errors="coerce")
+        .dt.year.dropna().astype(int).unique().tolist()
+    )
+    selected_years = st.multiselect(
+        "Year",
+        years,
+        default=years,
+        key="final_year_filter",
+    )
+
+    # 4) House filter
+    st.subheader("House Filter")
+    houses = sorted(
+        pd.to_numeric(energy["house_id"], errors="coerce")
+        .dropna().unique().tolist()
+    )
+    selected_houses = st.multiselect(
+        "House",
+        houses,
+        default=[],
+        key="final_house_filter",
+    )
+
+forecast_view = st.session_state["forecast_view"]
+
+filtered_energy = energy.copy()
+if selected_years:
+    filtered_energy = filtered_energy[
+        pd.to_datetime(filtered_energy["timestamp"], errors="coerce").dt.year.isin(selected_years)
+    ].copy()
+if selected_houses:
+    filtered_energy = filtered_energy[
+        filtered_energy["house_id"].isin(selected_houses)
+    ].copy()
+
+# ---------------------------------------------------------------------
+# TABS
+# ---------------------------------------------------------------------
+(
+    overview,
+    eda,
+    forecast,
+    comparison,
+    xai,
+    actions,
+    upload_tab,
+    live,
+    yolo,
+) = st.tabs(
+    [
+        "Overview",
+        "EDA",
+        "Future Forecast",
+        "Model Comparison",
+        "Explainable AI",
+        "Recommendations",
+        "New Dataset Upload",
+        "Live Energy + YOLO",
+        "YOLO Human Detection",
+    ]
+)
+
+# =====================================================================
+# OVERVIEW
+# =====================================================================
+with overview:
+    st.caption("Overview: quick view of energy usage, predictions and savings opportunity.")
+    c1, c2, c3, c4 = st.columns(4)
+
+    c1.metric("Best Model", str(best.Model))
+    c2.metric("Test RMSE", f"{safe_number(best.RMSE):.2f} kWh")
+    c3.metric("Test R²", f"{safe_number(best.R2):.3f}")
+    c4.metric(
+        "High-forecast cases",
+        f"{int((recommendations['energy_status'] == 'High').sum()):,}",
+    )
+
     st.divider()
 
-    st.markdown("**Deployed model**")
-    if final_model_info:
-        st.success(f"{final_model_info.get('final_model', FINAL_MODEL)}  ·  "
-                  f"Test RMSE {final_model_info.get('test_metrics', {}).get('RMSE', float('nan')):.2f} kWh")
+    st.subheader("Actual vs Predicted Next-Day Energy")
+
+    daily = (
+        recommendations.groupby("timestamp")[
+            ["prediction", "target_next_day_kwh"]
+        ]
+        .mean()
+        .rename(
+            columns={
+                "prediction": "Predicted kWh",
+                "target_next_day_kwh": "Actual kWh",
+            }
+        )
+    )
+
+    st.line_chart(daily, height=350)
+
+    a, b = st.columns(2)
+
+    with a:
+        st.subheader("Energy Status Distribution")
+        show_colored_bar_chart(
+            recommendations["energy_status"].value_counts().reindex(
+                ["High", "Normal", "Low"]
+            ).dropna(),
+            "Energy Status Distribution",
+            "Number of records",
+        )
+
+    with b:
+        st.subheader("Estimated Saving Opportunity")
+        saving = safe_number(
+            recommendations["estimated_saving_kwh"].sum()
+        )
+        st.metric("Estimated test-period saving", f"{saving:.1f} kWh")
+        st.caption(
+            "Rule-based estimate; this is not field-measured savings."
+        )
+
+    st.divider()
+
+    st.subheader("Project Pipeline")
+    st.markdown(
+        """
+        **Historical data → Cleaning → Feature Engineering → ML/DL comparison
+        → Best model → Future energy forecasting → YOLO human detection
+        → Occupancy-aware recommendation**
+        """
+    )
+
+# =====================================================================
+# EDA
+# =====================================================================
+with eda:
+    st.subheader("Exploratory Data Analysis")
+
+    if filtered_energy.empty:
+        st.warning("No records match the selected filters.")
     else:
-        st.info(f"{FINAL_MODEL} (run compare_models.py to record test metrics)")
+        st.caption(
+            f"Current filter: {len(filtered_energy):,} records | "
+            f"{filtered_energy.house_id.nunique()} homes | "
+            f"{filtered_energy.timestamp.min():%d-%b-%Y} to "
+            f"{filtered_energy.timestamp.max():%d-%b-%Y}"
+        )
 
-    st.divider()
-    st.markdown("**Pipeline status**")
-    for label, ok in data_status().items():
-        st.markdown(f"{'✅' if ok else '⬜'} {label}")
+        e1, e2 = st.columns(2)
 
-    st.divider()
-    if not energy_df.empty:
-        years = sorted(energy_df["timestamp"].dt.year.unique())
-        houses = sorted(energy_df["house_id"].unique())
-        selected_years = st.multiselect("Year filter", years, default=years)
-        selected_houses = st.multiselect("House filter", houses, default=houses[: min(10, len(houses))])
+        with e1:
+            p = REPORTS / "eda_daily_energy_trend.png"
+            if p.exists():
+                st.image(str(p), caption="Mean daily household consumption")
+
+            p = REPORTS / "eda_monthly_energy.png"
+            if p.exists():
+                st.image(str(p), caption="Monthly consumption distribution")
+
+        with e2:
+            p = REPORTS / "eda_correlation_heatmap.png"
+            if p.exists():
+                st.image(str(p), caption="Correlation of top variables with energy")
+
+        st.divider()
+        st.subheader("Historical Energy by Time Period")
+
+        temp = filtered_energy.copy()
+        temp["year_label"] = temp["timestamp"].dt.year.astype(str)
+        temp["month_label"] = temp["timestamp"].dt.to_period("M").astype(str)
+
+        temp["season"] = temp["timestamp"].dt.month.map(
+            {
+                12: "Winter",
+                1: "Winter",
+                2: "Winter",
+                3: "Summer",
+                4: "Summer",
+                5: "Summer",
+                6: "Monsoon",
+                7: "Monsoon",
+                8: "Monsoon",
+                9: "Monsoon",
+                10: "Post-monsoon",
+                11: "Post-monsoon",
+            }
+        )
+
+        monthly = (
+            temp.groupby("month_label")["kwh"]
+            .mean()
+            .rename("Mean kWh")
+        )
+
+        yearly = (
+            temp.groupby("year_label")["kwh"]
+            .mean()
+            .rename("Mean kWh")
+        )
+
+        seasonal = (
+            temp.groupby("season")["kwh"]
+            .mean()
+            .reindex(
+                ["Winter", "Summer", "Monsoon", "Post-monsoon"]
+            )
+            .dropna()
+            .rename("Mean kWh")
+        )
+
+        m1, m2 = st.columns(2)
+
+        with m1:
+            st.subheader("Monthly Energy")
+            st.line_chart(monthly, height=320)
+
+        with m2:
+            st.subheader("Yearly Energy")
+            show_colored_bar_chart(yearly, "Yearly Mean Energy", "Mean kWh")
+
+        st.subheader("Seasonal Energy")
+        show_colored_bar_chart(
+            seasonal,
+            "Seasonal Mean Energy",
+            "Mean kWh",
+        )
+
+        st.caption(
+            "These monthly/yearly charts represent historical observed "
+            "energy consumption, not future predictions."
+        )
+
+# =====================================================================
+# FUTURE FORECAST
+# =====================================================================
+with forecast:
+    st.subheader("🔮 AI Future Energy Forecast")
+
+    if future_forecasts.empty:
+        st.warning(
+            "Future forecast file not found. Run "
+            "generate_future_forecasts.py once."
+        )
     else:
-        selected_years, selected_houses = [], []
-        st.warning("energy_model_data.csv not found yet.")
+        ff = future_forecasts.copy()
+        ff["forecast_date"] = pd.to_datetime(ff["forecast_date"])
 
-filtered = pd.DataFrame()
-if not energy_df.empty:
-    filtered = energy_df[
-        energy_df["timestamp"].dt.year.isin(selected_years) & energy_df["house_id"].isin(selected_houses)
+        houses = sorted(ff["house_id"].dropna().unique().tolist())
+
+        selected_forecast_house = st.selectbox(
+            "Select house",
+            houses,
+            key="future_house",
+        )
+
+        house_rows = (
+            ff[ff["house_id"] == selected_forecast_house]
+            .sort_values("forecast_date")
+            .copy()
+        )
+
+        if forecast_view == "All Data":
+            house_future = house_rows.copy()
+            horizon = len(house_future)
+            forecast_title = "All Available Future Forecast Data"
+        elif forecast_view in ("7-Day", "30-Day"):
+            horizon = 7 if forecast_view == "7-Day" else 30
+            house_future = house_rows.head(horizon).copy()
+            forecast_title = f"{horizon}-Day Future Energy Forecast"
+        else:
+            selected_year = int(forecast_view)
+            house_future = house_rows[
+                house_rows["forecast_date"].dt.year == selected_year
+            ].copy()
+            horizon = len(house_future)
+            forecast_title = f"{selected_year} Future Energy Forecast"
+
+        if house_future.empty:
+            st.warning(
+                f"No forecast records are currently available for House "
+                f"{selected_forecast_house} in the selected view **{forecast_view}**. "
+                "Run the future-forecast generation pipeline for that period."
+            )
+        else:
+            total_forecast = house_future["predicted_kwh"].sum()
+            average_forecast = house_future["predicted_kwh"].mean()
+            maximum_forecast = house_future["predicted_kwh"].max()
+
+            k1, k2, k3, k4 = st.columns(4)
+            k1.metric(
+                "Forecast Days",
+                len(house_future),
+            )
+            k2.metric(
+                "Average Daily Energy",
+                f"{average_forecast:.2f} kWh",
+            )
+            k3.metric(
+                "Total Forecast",
+                f"{total_forecast:.2f} kWh",
+            )
+            k4.metric(
+                "Peak Forecast",
+                f"{maximum_forecast:.2f} kWh",
+            )
+
+            chart_data = house_future.set_index("forecast_date")[
+                ["predicted_kwh"]
+            ].rename(columns={"predicted_kwh": "Predicted kWh"})
+
+            st.subheader(
+                f"{forecast_title} — House {selected_forecast_house}"
+            )
+            st.line_chart(chart_data, height=400)
+
+            st.dataframe(
+                house_future,
+                width="stretch",
+                hide_index=True,
+            )
+
+            st.download_button(
+                "Download selected-house forecast",
+                house_future.to_csv(index=False).encode("utf-8"),
+                f"house_{selected_forecast_house}_{horizon}day_forecast.csv",
+                "text/csv",
+            )
+
+        st.divider()
+        st.subheader("All-House Future Forecast Summary")
+
+        summary = (
+            ff.groupby("forecast_date")["predicted_kwh"]
+            .mean()
+            .rename("Average predicted kWh")
+        )
+
+        st.line_chart(summary, height=350)
+
+        st.caption(
+            "The generated multi-day forecasts are scenario projections. "
+            "Future weather is assumed to remain at the latest available values."
+        )
+
+# =====================================================================
+# MODEL COMPARISON
+# =====================================================================
+with comparison:
+    st.caption("Model Comparison: compare ML and Deep Learning performance metrics.")
+    st.subheader("ML / DL Model Comparison")
+
+    image_path = REPORTS / "five_model_comparison.png"
+    if image_path.exists():
+        st.image(
+            str(image_path),
+            caption="Chronological held-out test comparison",
+        )
+
+    st.dataframe(
+        metrics,
+        width="stretch",
+        hide_index=True,
+    )
+
+    st.success(
+        "LSTM is the final selected Deep Learning model for the deployed prediction workflow. "
+        "Other algorithms remain available for research comparison."
+    )
+
+# =====================================================================
+# XAI
+# =====================================================================
+with xai:
+    st.caption("Explainable AI: see which features influence energy predictions.")
+    st.subheader("🔎 Explainable AI")
+
+    shap_path = REPORTS / "shap_global_importance.png"
+
+    if shap_path.exists():
+        st.image(
+            str(shap_path),
+            caption="SHAP global feature importance for the selected model",
+        )
+
+    if importance.empty:
+        st.info("Permutation importance data is not available.")
+    else:
+        xai_series = (
+            importance.set_index("feature")["importance_mean"]
+            .head(15)
+            .sort_values()
+        )
+        fig, ax = plt.subplots(figsize=(10, 5.5))
+        ax.barh(
+            xai_series.index.astype(str),
+            xai_series.values,
+            color="#8e44ad",
+        )
+        ax.set_title("Top Explainable AI Features", fontweight="bold")
+        ax.set_xlabel("Mean importance")
+        ax.grid(axis="x", alpha=0.22)
+        fig.tight_layout()
+        st.pyplot(fig, clear_figure=True)
+
+        st.dataframe(
+            importance.head(15),
+            width="stretch",
+            hide_index=True,
+        )
+
+        st.warning(
+            "Feature importance indicates predictive association, "
+            "not causal proof."
+        )
+
+# =====================================================================
+# RECOMMENDATIONS
+# =====================================================================
+with actions:
+    st.caption("Recommendations: convert predicted energy status into saving actions.")
+    st.subheader("🏠 Household-Specific Recommendations")
+
+    houses = sorted(recommendations.house_id.dropna().unique().tolist())
+
+    house = st.selectbox(
+        "Select house",
+        houses,
+        key="recommendation_house",
+    )
+
+    view = (
+        recommendations[
+            recommendations.house_id == house
+        ]
+        .sort_values("timestamp", ascending=False)
+        .copy()
+    )
+
+    latest = view.iloc[0]
+
+    r1, r2, r3 = st.columns(3)
+
+    r1.metric(
+        "Predicted Next-Day Use",
+        f"{safe_number(latest.prediction):.2f} kWh",
+    )
+    r2.metric(
+        "Seven-Day Baseline",
+        f"{safe_number(latest.baseline_kwh):.2f} kWh",
+    )
+    r3.metric(
+        "Energy Status",
+        str(latest.energy_status),
+    )
+
+    predicted_value = safe_number(latest.prediction)
+    baseline_value = safe_number(latest.baseline_kwh)
+    saving_value = safe_number(latest.get("estimated_saving_kwh", 0))
+
+    if str(latest.energy_status) == "High":
+        st.warning(
+            f"🔴 HIGH ENERGY: predicted use is {predicted_value:.2f} kWh "
+            f"against a 7-day baseline of {baseline_value:.2f} kWh. "
+            "Action: switch off unused devices, reduce unnecessary lighting, "
+            "and optimise AC/high-load appliances."
+        )
+    elif str(latest.energy_status) == "Low":
+        st.success(
+            f"🟢 LOW ENERGY: predicted use is {predicted_value:.2f} kWh. "
+            "Action: current usage is efficient; keep essential devices active "
+            "and continue monitoring."
+        )
+    else:
+        st.info(
+            f"🟡 NORMAL ENERGY: predicted use is {predicted_value:.2f} kWh "
+            f"with a 7-day baseline of {baseline_value:.2f} kWh. "
+            "Action: maintain normal usage and switch off idle loads."
+        )
+
+    if saving_value > 0:
+        st.caption(
+            f"Estimated saving opportunity: {saving_value:.2f} kWh. "
+            "This is a rule-based estimate, not measured savings."
+        )
+
+    display_cols = [
+        "timestamp",
+        "prediction",
+        "target_next_day_kwh",
+        "baseline_kwh",
+        "energy_status",
+        "estimated_saving_kwh",
+        "recommendations",
     ]
 
-# ===========================================================================
-# HERO
-# ===========================================================================
-hero(
-    "AI-Based Smart Building Energy Management",
-    "Deep-learning next-day energy forecasting, explainable AI, and YOLOv8 occupancy "
-    "detection combined into one operational dashboard.",
-    [
-        f"Model: {FINAL_MODEL}",
-        f"{energy_df['house_id'].nunique() if not energy_df.empty else '—'} houses",
-        f"{len(energy_df):,} rows" if not energy_df.empty else "no data loaded",
-    ],
-)
+    display_cols = [
+        c for c in display_cols if c in view.columns
+    ]
 
-tab_overview, tab_eda, tab_forecast, tab_models, tab_xai, tab_reco, tab_upload, tab_live = st.tabs(
-    ["Overview", "Data & EDA", "Future Forecast", "Model Comparison",
-     "Explainable AI", "Recommendations", "Upload & Predict", "Live Occupancy"]
-)
+    st.dataframe(
+        view[display_cols].head(30),
+        width="stretch",
+        hide_index=True,
+    )
 
-# ===========================================================================
-# TAB 1 — OVERVIEW
-# ===========================================================================
-with tab_overview:
-    st.subheader("Project overview")
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        stat_card("Dataset rows", f"{len(energy_df):,}" if not energy_df.empty else "—")
-    with c2:
-        stat_card("Houses", f"{energy_df['house_id'].nunique()}" if not energy_df.empty else "—")
-    with c3:
-        span = (f"{energy_df['timestamp'].min():%b %Y} – {energy_df['timestamp'].max():%b %Y}"
-               if not energy_df.empty else "—")
-        stat_card("Date range", span)
-    with c4:
-        rmse = final_model_info.get("test_metrics", {}).get("RMSE") if final_model_info else None
-        stat_card("Deployed model", FINAL_MODEL, f"Test RMSE {rmse:.2f} kWh" if rmse else "not yet evaluated")
+    st.download_button(
+        "Download selected-house recommendations",
+        view.to_csv(index=False).encode("utf-8"),
+        f"house_{house}_recommendations.csv",
+        "text/csv",
+    )
 
-    st.markdown("###")
-    lstm_predictions = load_csv("predictions_lstm.csv", parse_dates=["timestamp"])
-    left, right = st.columns([2, 1])
-    with left:
-        st.markdown("**Actual vs predicted — held-out test set**")
-        if lstm_predictions.empty:
-            note("reports/predictions_lstm.csv not found. Run train_dl.py.", "warn")
-        else:
-            sample = lstm_predictions.sort_values("timestamp").tail(200)
-            fig = go.Figure()
-            fig.add_scatter(x=sample["timestamp"], y=sample["actual"], name="Actual",
-                            line=dict(color=PALETTE["ink"], width=2))
-            fig.add_scatter(x=sample["timestamp"], y=sample["prediction"], name="Predicted",
-                            line=dict(color=PALETTE["brand"], width=2, dash="dot"))
-            fig.update_layout(height=340, margin=dict(l=10, r=10, t=10, b=10),
-                              legend=dict(orientation="h", y=1.1), paper_bgcolor="rgba(0,0,0,0)",
-                              plot_bgcolor="rgba(0,0,0,0)")
-            st.plotly_chart(fig, use_container_width=True)
-            note("Shown on the model's own scale: this is the test split the model never trained on.")
-    with right:
-        st.markdown("**Energy status mix (recommendations)**")
-        reco = load_csv("recommendations.csv", parse_dates=["timestamp"])
-        if reco.empty or "energy_status" not in reco.columns:
-            note("reports/recommendations.csv not found. Run explain_and_recommend.py.", "warn")
-        else:
-            counts = reco["energy_status"].value_counts()
-            fig = px.pie(values=counts.values, names=counts.index, hole=0.6,
-                        color=counts.index,
-                        color_discrete_map={"High": PALETTE["red"], "Normal": PALETTE["brand"],
-                                            "Low": PALETTE["blue"]})
-            fig.update_traces(textinfo="percent+label")
-            fig.update_layout(height=300, margin=dict(l=0, r=0, t=10, b=0), showlegend=False,
-                              paper_bgcolor="rgba(0,0,0,0)")
-            st.plotly_chart(fig, use_container_width=True)
-            avg_saving = reco["estimated_saving_kwh"].mean()
-            stat_card("Avg. estimated saving / house-day", f"{avg_saving:.2f} kWh")
+    st.divider()
+    st.subheader("Occupancy-Aware Recommendation Logic")
 
-    st.markdown("###")
-    st.markdown("**Pipeline**")
-    steps = ["Data cleaning", "Feature engineering", "ML + DL model training",
-            "Model comparison", "XAI (SHAP)", "YOLOv8 detection", "Recommendation engine", "Dashboard"]
-    cols = st.columns(len(steps))
-    for column, step, index in zip(cols, steps, range(1, len(steps) + 1)):
-        with column:
-            st.markdown(f"<div class='card' style='text-align:center;padding:14px 8px;'>"
-                       f"<div style='color:{PALETTE['brand']};font-weight:700;'>{index}</div>"
-                       f"<div style='font-size:.82rem;color:{PALETTE['ink']};'>{step}</div></div>",
-                       unsafe_allow_html=True)
+    st.info(
+        "YOLO human presence is used as a current operational signal for "
+        "recommendation and energy-impact interpretation. It is not silently "
+        "inserted into the historical forecasting model unless the model "
+        "was explicitly trained with occupancy as an input feature."
+    )
 
-# ===========================================================================
-# TAB 2 — DATA & EDA
-# ===========================================================================
-with tab_eda:
-    st.subheader("Exploratory data analysis")
-    quality = load_json_cached(REPORTS / "eda_data_quality_summary.json")
-    if quality:
+
+# =====================================================================
+# NEW ELECTRICITY DATASET UPLOAD
+# =====================================================================
+with upload_tab:
+    st.caption("New Dataset Upload: upload electricity data and generate an LSTM prediction.")
+    st.subheader("📤 Upload New Electricity Dataset")
+
+    st.write(
+        "Upload a new electricity/energy CSV or Excel file. "
+        "The dashboard validates the file, processes the available "
+        "features and generates a next-day prediction using LSTM."
+    )
+
+    st.caption(
+        "Required: date/time + electricity/energy column. "
+        "Date + Time and Global_active_power files are supported. "
+        "House ID, occupancy and weather columns are optional."
+    )
+    st.caption(
+        "Demo-friendly: small files are accepted; if fewer than 7 rows are uploaded, "
+        "the LSTM sequence is safely padded using the earliest available row."
+    )
+
+    uploaded_file = st.file_uploader(
+        "Choose electricity / energy dataset",
+        type=["csv", "xlsx", "xls"],
+        key="new_electricity_dataset"
+    )
+
+    if uploaded_file is None:
+        st.info("👆 Upload an electricity/energy CSV or XLSX file to begin.")
+    else:
+        try:
+            raw_upload = read_uploaded_energy_file(uploaded_file)
+
+            st.success(f"Uploaded: **{uploaded_file.name}**")
+            st.caption(
+                f"{len(raw_upload):,} rows × {len(raw_upload.columns)} columns"
+            )
+
+            st.dataframe(
+                raw_upload.head(10),
+                width="stretch",
+                hide_index=True
+            )
+
+            if st.button(
+                "🚀 Process Dataset & Predict with LSTM",
+                type="primary",
+                use_container_width=True,
+                key="upload_lstm_predict"
+            ):
+                try:
+                    with st.spinner("Loading final LSTM model..."):
+                        lstm_model, lstm_features, lstm_scaler, seq_days = load_lstm_model()
+
+                    with st.spinner("Validating and processing dataset..."):
+                        prepared_upload = prepare_uploaded_energy_data(
+                            raw_upload, energy, lstm_features
+                        )
+
+                    with st.spinner("Generating LSTM prediction..."):
+                        upload_result = predict_uploaded_energy(
+                            prepared_upload,
+                            lstm_model,
+                            lstm_features,
+                            lstm_scaler,
+                            seq_days
+                        )
+
+                    upload_result = upload_energy_recommendation(
+                        upload_result, energy
+                    )
+
+                    st.session_state["uploaded_lstm_result"] = upload_result
+                    st.success("✅ Dataset processed and LSTM prediction completed.")
+
+                except ValueError as exc:
+                    st.error(f"❌ {exc}")
+
+                except Exception as exc:
+                    st.error("❌ The uploaded file could not be processed.")
+                    st.exception(exc)
+
+        except Exception as exc:
+            st.error(
+                "❌ Please upload a valid electricity/energy CSV, XLSX or XLS file."
+            )
+            st.exception(exc)
+
+    if "uploaded_lstm_result" in st.session_state:
+        result = st.session_state["uploaded_lstm_result"]
+
+        st.divider()
+        st.subheader("🔮 LSTM Prediction Result")
+
+        latest = result.iloc[-1]
         c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            stat_card("Zero-kWh records", f"{quality['zero_kwh_records']:,}", f"{quality['zero_kwh_percent']}%")
-        with c2:
-            stat_card("Duplicate records", f"{quality['duplicate_records']:,}")
-        with c3:
-            stat_card("Outlier records (IQR)", f"{quality['outlier_records']:,}", f"{quality['outlier_percent']}%")
-        with c4:
-            stat_card("Mean daily use", f"{quality['kwh_mean']:.2f} kWh", f"median {quality['kwh_median']:.2f}")
-    else:
-        note("Run eda.py to populate data-quality statistics.", "warn")
 
-    if not filtered.empty:
-        st.markdown("###")
-        view = st.radio("Aggregate by", ["Daily", "Monthly", "Yearly", "Seasonal"], horizontal=True)
-        work = filtered.copy()
-        if view == "Daily":
-            series = work.groupby("timestamp")["kwh"].mean().reset_index()
-            fig = px.line(series, x="timestamp", y="kwh")
-        elif view == "Monthly":
-            work["period"] = work["timestamp"].dt.to_period("M").astype(str)
-            series = work.groupby("period")["kwh"].mean().reset_index()
-            fig = px.bar(series, x="period", y="kwh")
-        elif view == "Yearly":
-            work["year"] = work["timestamp"].dt.year
-            series = work.groupby("year")["kwh"].mean().reset_index()
-            fig = px.bar(series, x="year", y="kwh")
-        else:
-            work["season"] = work["timestamp"].dt.month.map(season_name)
-            series = work.groupby("season")["kwh"].mean().reindex(
-                ["Winter", "Summer", "Monsoon", "Post-monsoon"]).reset_index()
-            fig = px.bar(series, x="season", y="kwh")
-        if view == "Daily":
-            fig.update_traces(line_color=PALETTE["brand"])
-        else:
-            fig.update_traces(marker_color=PALETTE["brand"])
-        fig.update_layout(height=360, margin=dict(l=10, r=10, t=10, b=10), yaxis_title="kWh",
-                          paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        note("No rows match the current sidebar filters.", "warn")
+        c1.metric("House", str(latest["house_id"]))
+        c2.metric("Latest Actual", f"{latest['latest_actual_kwh']:.2f} kWh")
+        c3.metric("Predicted Next-Day", f"{latest['predicted_next_day_kwh']:.2f} kWh")
+        c4.metric("Energy Status", str(latest["energy_status"]))
 
-    st.markdown("###")
-    figure_cols = st.columns(2)
-    figures = ["eda_daily_energy_trend.png", "eda_monthly_energy.png",
-              "eda_kwh_distribution.png", "eda_correlation_heatmap.png"]
-    for index, name in enumerate(figures):
-        path = REPORTS / name
-        if path.exists():
-            with figure_cols[index % 2]:
-                st.image(str(path), use_container_width=True, caption=name.replace("_", " ").replace(".png", ""))
+        st.dataframe(result, width="stretch", hide_index=True)
 
-# ===========================================================================
-# TAB 3 — FUTURE FORECAST
-# ===========================================================================
-with tab_forecast:
-    st.subheader("Future energy forecast")
-    future = load_csv("future_energy_forecasts.csv", parse_dates=["forecast_date"])
-    future_meta = load_json_cached(REPORTS / "future_forecast_metadata.json")
-    if future.empty:
-        note("reports/future_energy_forecasts.csv not found. Run generate_future_forecasts.py.", "warn")
-    else:
-        note(future_meta.get("note", "Recursive multi-day forecasts are scenario projections; "
-                                     "only the next-day forecast is validated on the test set."), "warn")
-        future["house_id"] = normalise_id(future["house_id"])
-        house_options = sorted(future["house_id"].unique())
-        house_choice = st.selectbox("House", house_options)
-        house_forecast = future[future["house_id"] == house_choice].sort_values("forecast_date")
+        st.subheader("💡 Recommendation")
 
-        fig = go.Figure()
-        fig.add_scatter(x=house_forecast["forecast_date"], y=house_forecast["predicted_kwh"],
-                        name="Predicted kWh", line=dict(color=PALETTE["brand"], width=2))
-        fig.add_scatter(x=house_forecast["forecast_date"], y=house_forecast["baseline_kwh"],
-                        name="7-day baseline", line=dict(color=PALETTE["muted"], width=1, dash="dot"))
-        fig.update_layout(height=340, margin=dict(l=10, r=10, t=10, b=10),
-                          legend=dict(orientation="h", y=1.1), paper_bgcolor="rgba(0,0,0,0)",
-                          plot_bgcolor="rgba(0,0,0,0)")
-        st.plotly_chart(fig, use_container_width=True)
-
-        if "horizon_day" in house_forecast.columns:
-            far = house_forecast[house_forecast["horizon_day"] > 30]
-            if not far.empty:
-                note(f"{len(far)} of these rows are more than 30 days out (horizon_day > 30); "
-                    "treat them as an illustrative trend, not a precise forecast.", "warn")
-
-        st.markdown("**All-house summary**")
-        summary = load_csv("future_forecast_summary.csv", parse_dates=["forecast_date"])
-        if not summary.empty:
-            fig2 = px.line(summary, x="forecast_date", y="predicted_kwh")
-            fig2.update_traces(line_color=PALETTE["blue"])
-            fig2.update_layout(height=260, margin=dict(l=10, r=10, t=10, b=10),
-                              paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-            st.plotly_chart(fig2, use_container_width=True)
-
-# ===========================================================================
-# TAB 4 — MODEL COMPARISON
-# ===========================================================================
-with tab_models:
-    st.subheader("Model comparison")
-    if comparison_df.empty:
-        note("reports/all_model_comparison.csv not found. Run build_model_comparison.py "
-            "after train_ml.py and train_dl.py.", "warn")
-    else:
-        type_colors = {"Machine Learning": PALETTE["blue"], "Deep Learning": PALETTE["brand"],
-                      "Hybrid (weighted blend)": PALETTE["amber"]}
-        ranked = comparison_df.sort_values("RMSE")
-        # LSTM (the deployed model) always gets the dark "ink" colour so it is
-        # instantly distinguishable from every other bar, regardless of Type.
-        bar_colors = [PALETTE["ink"] if str(m).strip().upper() == FINAL_MODEL.upper()
-                     else type_colors.get(t, PALETTE["muted"])
-                     for m, t in zip(ranked["Model"], ranked["Type"])]
-        fig = go.Figure(go.Bar(x=ranked["Model"], y=ranked["RMSE"], marker_color=bar_colors,
-                               text=[f"{v:.2f}" for v in ranked["RMSE"]], textposition="outside"))
-        fig.update_layout(height=380, margin=dict(l=10, r=10, t=10, b=10), yaxis_title="Test RMSE (kWh)",
-                          paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-        st.plotly_chart(fig, use_container_width=True)
-        st.markdown(
-            f'<div style="font-size:.82rem;color:{PALETTE["muted"]};margin:-6px 0 10px;">'
-            f'<span style="color:{PALETTE["ink"]}">⬤</span> {FINAL_MODEL} (deployed) &nbsp;·&nbsp; '
-            f'<span style="color:{PALETTE["blue"]}">⬤</span> Machine Learning &nbsp;·&nbsp; '
-            f'<span style="color:{PALETTE["brand"]}">⬤</span> Deep Learning &nbsp;·&nbsp; '
-            f'<span style="color:{PALETTE["amber"]}">⬤</span> Hybrid</div>',
-            unsafe_allow_html=True,
-        )
-
-        show = comparison_df.sort_values("RMSE").copy()
-        show["Deployed"] = show["Deployed"].map({True: "✅", False: ""})
-        st.dataframe(show[["Rank", "Model", "Type", "MAE", "RMSE", "R2", "Deployed"]],
-                    use_container_width=True, hide_index=True)
-
-        dl_info = (final_model_info or {}).get("deep_learning_comparison", {})
-        lowest_in_dl = dl_info.get("lowest_rmse_model")
-        if lowest_in_dl and lowest_in_dl != FINAL_MODEL:
-            note(f"'{lowest_in_dl}' has a lower test RMSE than the deployed {FINAL_MODEL} in this run. "
-                f"{FINAL_MODEL} remains deployed for practical reasons (sequence modelling of daily "
-                "consumption) — state this trade-off explicitly in the report rather than claiming "
-                f"{FINAL_MODEL} has the lowest error.", "bad")
-        elif not comparison_df.empty:
-            deployed_is_lowest = bool(comparison_df.sort_values("RMSE").iloc[0]["Deployed"])
-            if not deployed_is_lowest:
-                best = comparison_df.sort_values("RMSE").iloc[0]["Model"]
-                note(f"'{best}' has the lowest test RMSE in all_model_comparison.csv, not the "
-                    f"deployed {FINAL_MODEL}. Report this honestly.", "bad")
-
-# ===========================================================================
-# TAB 5 — EXPLAINABLE AI
-# ===========================================================================
-with tab_xai:
-    st.subheader("Explainable AI")
-    xai_meta = load_json_cached(REPORTS / "xai_metadata.json")
-    if xai_meta:
-        note(xai_meta.get("note", ""), "warn")
-        st.caption(f"XAI computed on: **{xai_meta.get('xai_model', '—')}**  |  "
-                  f"Deployed forecasting model: **{FINAL_MODEL}**")
-
-    perm = load_csv("permutation_importance.csv")
-    left, right = st.columns(2)
-    with left:
-        st.markdown("**Permutation importance**")
-        if perm.empty:
-            note("reports/permutation_importance.csv not found.", "warn")
-        else:
-            top = perm.head(15).sort_values("importance_mean")
-            fig = px.bar(top, x="importance_mean", y="feature", orientation="h",
-                        error_x="importance_std")
-            fig.update_traces(marker_color=PALETTE["brand"])
-            fig.update_layout(height=420, margin=dict(l=10, r=10, t=10, b=10),
-                              paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-            st.plotly_chart(fig, use_container_width=True)
-    with right:
-        st.markdown("**SHAP global importance**")
-        shap_png = REPORTS / "shap_global_importance.png"
-        shap_csv = load_csv("shap_global_importance.csv")
-        if shap_png.exists():
-            st.image(str(shap_png), use_container_width=True)
-        elif not shap_csv.empty:
-            fig = px.bar(shap_csv.head(15).sort_values("mean_abs_shap"),
-                        x="mean_abs_shap", y="feature", orientation="h")
-            fig.update_traces(marker_color=PALETTE["amber"])
-            fig.update_layout(height=420, margin=dict(l=10, r=10, t=10, b=10),
-                              paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            status_text = (REPORTS / "shap_status.txt")
-            note(status_text.read_text() if status_text.exists()
-                else "SHAP output not found. Run explain_and_recommend.py.", "warn")
-
-# ===========================================================================
-# TAB 6 — RECOMMENDATIONS
-# ===========================================================================
-with tab_reco:
-    st.subheader("Household recommendations")
-    reco = load_csv("recommendations.csv", parse_dates=["timestamp"])
-    reco_meta = load_json_cached(REPORTS / "recommendations_metadata.json")
-    if reco.empty:
-        note("reports/recommendations.csv not found. Run explain_and_recommend.py.", "warn")
-    else:
-        if reco_meta:
-            st.caption(f"Predictions from: **{reco_meta.get('prediction_model', '—')}**  "
-                      f"({reco_meta.get('alignment', '')})")
-        reco["house_id"] = normalise_id(reco["house_id"])
-        house_choice = st.selectbox("Filter by house", ["All"] + sorted(reco["house_id"].unique()),
-                                    key="reco_house")
-        view = reco if house_choice == "All" else reco[reco["house_id"] == house_choice]
-
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            stat_card("Rows", f"{len(view):,}")
-        with c2:
-            stat_card("Avg. predicted kWh", f"{view['prediction'].mean():.2f}")
-        with c3:
-            stat_card("Total estimated saving", f"{view['estimated_saving_kwh'].sum():.1f} kWh")
-
-        display = view.sort_values("timestamp", ascending=False).head(200).copy()
-        display["timestamp"] = display["timestamp"].dt.strftime("%d-%b-%Y")
-        st.dataframe(
-            display[["timestamp", "house_id", "prediction", "baseline_kwh", "energy_status",
-                    "estimated_saving_kwh", "recommendations"]],
-            use_container_width=True, hide_index=True,
-        )
-        note("Saving = max(0, predicted − 7-day baseline) × assumed reduction rate "
-            "(High 10%, Normal 5%, Low 2%). This is a planning estimate, not a measured result.")
-
-    with st.expander("Occupancy-aware recommendation logic"):
-        rows = []
-        for limit, level, factor, advice in [
-            (0, "Empty room", 0.20, "no people detected"),
-            (2, "Low occupancy", 0.10, "1–2 people"),
-            (4, "Moderate occupancy", 0.05, "3–4 people"),
-            (None, "High occupancy", 0.02, "5+ people"),
-        ]:
-            rows.append({"People detected": advice, "Level": level, "Assumed saving": f"{factor*100:.0f}%"})
-        st.table(pd.DataFrame(rows))
-        note(f"Status bands: High ≥ {STATUS_HIGH_RATIO*100:.0f}% of baseline, "
-            f"Low ≤ {STATUS_LOW_RATIO*100:.0f}% of baseline, else Normal. "
-            f"High-use alert also fires at ≥ {HIGH_KWH_ALERT:.0f} kWh regardless of baseline.")
-
-# ===========================================================================
-# TAB 7 — UPLOAD & PREDICT
-# ===========================================================================
-with tab_upload:
-    st.subheader("Upload a dataset and predict with the deployed LSTM")
-    bundle = load_lstm()
-    if bundle is None:
-        note(f"Could not load the LSTM checkpoint ({st.session_state.get('_lstm_error', 'unknown error')}). "
-            "Train the model first (train_dl.py).", "bad")
-    else:
-        st.caption(f"Model expects **{bundle.sequence_days} consecutive daily rows** and "
-                  f"**{len(bundle.features)} features** per row (read from the checkpoint).")
-        uploaded = st.file_uploader("CSV with at least timestamp, house_id, kwh "
-                                    f"(and ideally {bundle.sequence_days + 7}+ rows per house)", type=["csv"])
-        if uploaded is not None:
-            try:
-                raw = pd.read_csv(uploaded)
-                st.dataframe(raw.head(8), use_container_width=True)
-                candidate_ids = None
-                cleaned_preview = raw.rename(columns=clean_name)
-                if "house_id" in cleaned_preview.columns:
-                    candidate_ids = sorted(cleaned_preview["house_id"].dropna().astype(str).unique())
-                house_pick = (st.selectbox("House to predict for", candidate_ids)
-                             if candidate_ids and len(candidate_ids) > 1 else None)
-
-                if st.button("Run prediction", type="primary"):
-                    window, meta = build_prediction_window(raw, bundle, house_id=house_pick)
-                    if not meta["consecutive"]:
-                        note("The most recent rows used are not on consecutive calendar days; "
-                            "the forecast may be less reliable.", "warn")
-                    prediction = bundle.predict(window)
-                    st.markdown(f"**Prediction window:** house `{meta['house_id']}`, "
-                              f"{meta['window_start']:%d-%b-%Y} → {meta['window_end']:%d-%b-%Y}  "
-                              f"→ forecast for **{meta['window_end'] + pd.Timedelta(days=1):%d-%b-%Y}**")
-                    render_recommendation_block(prediction, meta["rolling_7"] or meta["baseline_kwh"])
-            except ValueError as error:
-                note(str(error), "bad")
-            except Exception as error:
-                note(f"Could not process this file: {error}", "bad")
-
-# ===========================================================================
-# TAB 8 — LIVE OCCUPANCY (YOLOv8 + energy impact)
-# ===========================================================================
-with tab_live:
-    st.subheader("Live occupancy detection and energy impact")
-    yolo_metrics = load_json_cached(ROOT / "data" / "yolo" / "reports" / "test_metrics_summary.json")
-    if yolo_metrics:
-        cols = st.columns(4)
-        keys = [k for k in yolo_metrics if any(m in k.lower() for m in ("precision", "recall", "map50"))][:4]
-        for column, key in zip(cols, keys):
-            with column:
-                stat_card(key.split("/")[-1].replace("(B)", ""), f"{yolo_metrics[key]:.3f}")
-    else:
-        note("YOLO test_metrics_summary.json not found yet.", "warn")
-
-    model = load_yolo()
-    reco_all = load_csv("recommendations.csv", parse_dates=["timestamp"])
-
-    left, right = st.columns([1, 1])
-    with left:
-        input_mode = st.radio("Image source", ["📁 Upload image", "📷 Take photo"], horizontal=True)
-        if input_mode == "📷 Take photo":
-            image_file = st.camera_input("Take a photo of the room")
-        else:
-            image_file = st.file_uploader("Upload a room / CCTV image", type=["jpg", "jpeg", "png"])
-        confidence = st.slider("Detection confidence threshold", 0.10, 0.90, YOLO_CONFIDENCE, 0.05,
-                               help="Lower this if people in frame are being missed; raise it if "
-                                   "furniture or shadows are being flagged as people.")
-        predicted_kwh = st.number_input(
-            "Predicted next-day energy for this house (kWh) — from the Upload & Predict "
-            "or Recommendations tab", min_value=0.0, value=20.0, step=0.5)
-
-    with right:
-        if image_file is not None:
-            # exif_transpose fixes sideways/upside-down phone and webcam captures
-            # before detection, which otherwise silently tanks accuracy.
-            image = ImageOps.exif_transpose(Image.open(image_file)).convert("RGB")
-            st.image(image, caption="Captured image", use_container_width=True)
-            if model is None:
-                note(f"YOLO model not available ({st.session_state.get('_yolo_error', 'not found')}).", "bad")
+        for _, row in result.iterrows():
+            msg = f"**House {row['house_id']}** — {row['recommendation']}"
+            if row["energy_status"] == "High":
+                st.warning(msg)
+            elif row["energy_status"] == "Low":
+                st.success(msg)
             else:
-                # Pass the PIL Image object itself, NOT np.array(image): Ultralytics
-                # reads a raw numpy array as BGR (OpenCV convention). A PIL image is
-                # RGB, so np.array(image) silently swaps the colour channels and the
-                # model's confidence collapses - this was why real people in frame
-                # were detected as 0 persons.
-                results = model.predict(source=image, conf=confidence, verbose=False)
-                person_count = int(len(results[0].boxes)) if results and results[0].boxes is not None else 0
-                st.image(results[0].plot()[:, :, ::-1], caption=f"Detected: {person_count} person(s)",
-                        use_container_width=True)
+                st.info(msg)
 
-                if person_count == 0:
-                    note("No person detected. Try: better lighting, the full person in frame, "
-                        "or lowering the confidence slider above.", "warn")
+        st.subheader("📊 Actual vs Predicted")
 
-                impact = occupancy_energy_impact(predicted_kwh, person_count)
-                c1, c2, c3 = st.columns(3)
-                with c1:
-                    stat_card("People detected", str(person_count))
-                with c2:
-                    stat_card("Occupancy level", impact["level"])
-                with c3:
-                    stat_card("Potential saving", f"{impact['potential_saving_kwh']:.2f} kWh",
-                              f"{impact['saving_percent']:.0f}% of forecast")
-                st.markdown(f'<div class="reco-item">{impact["advice"]}</div>', unsafe_allow_html=True)
-                note("This is a rule-based scenario (predicted kWh × occupancy-band saving factor), "
-                    "not a measured saving.")
+        chart_df = result[
+            ["house_id", "latest_actual_kwh", "predicted_next_day_kwh"]
+        ].copy()
 
-    if not reco_all.empty:
-        with st.expander("Recent predictions available to reuse above"):
-            st.dataframe(reco_all.sort_values("timestamp", ascending=False)
-                        [["timestamp", "house_id", "prediction", "energy_status"]].head(20),
-                        use_container_width=True, hide_index=True)
+        fig, ax = plt.subplots(figsize=(10, 4.5))
+        x = np.arange(len(chart_df))
+        width = 0.36
 
-st.markdown("###")
-st.caption(f"AI-Based Smart Building Energy Management System · MCA Final Project · "
-          f"Sarah Tucker College · Guide: Dr. Jairuby · Generated {datetime.now():%d %b %Y}")
+        ax.bar(
+            x - width/2,
+            chart_df["latest_actual_kwh"],
+            width,
+            label="Actual kWh",
+            color="#3498db"
+        )
+        ax.bar(
+            x + width/2,
+            chart_df["predicted_next_day_kwh"],
+            width,
+            label="Predicted Next-Day kWh",
+            color="#e74c3c"
+        )
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(chart_df["house_id"].astype(str))
+        ax.set_xlabel("House ID")
+        ax.set_ylabel("Energy (kWh)")
+        ax.set_title(
+            "Uploaded Dataset — Actual vs LSTM Prediction",
+            fontweight="bold"
+        )
+        ax.legend()
+        ax.grid(axis="y", alpha=.25)
+
+        fig.tight_layout()
+        st.pyplot(fig, clear_figure=True)
+
+        st.download_button(
+            "⬇️ Download Prediction + Recommendation",
+            result.to_csv(index=False).encode("utf-8"),
+            "uploaded_energy_lstm_prediction.csv",
+            "text/csv",
+            use_container_width=True
+        )
+
+
+# =====================================================================
+# LIVE ENERGY + YOLO
+# =====================================================================
+with live:
+    st.subheader("🎥 Live Energy + YOLO")
+
+    st.write(
+        "Select a house, view its saved future forecast, and upload/capture "
+        "a current room image. YOLO detects people and the dashboard combines "
+        "the current human-presence result with the energy forecast for an "
+        "operational recommendation."
+    )
+
+    if future_forecasts.empty:
+        st.warning(
+            "Run generate_future_forecasts.py first. "
+            "The existing future forecast files are required."
+        )
+    else:
+        live_houses = sorted(
+            future_forecasts.house_id.dropna().unique().tolist()
+        )
+
+        current_house = st.selectbox(
+            "House for current forecast",
+            live_houses,
+            key="live_house",
+        )
+
+        house_rows = (
+            future_forecasts[
+                future_forecasts.house_id == current_house
+            ]
+            .sort_values("forecast_date")
+        )
+
+        forecast = house_rows.iloc[0]
+
+        p1, p2, p3, p4 = st.columns(4)
+
+        p1.metric(
+            "Forecast Date",
+            forecast.forecast_date.strftime("%d-%b-%Y"),
+        )
+        p2.metric(
+            "Predicted Energy",
+            f"{safe_number(forecast.predicted_kwh):.2f} kWh",
+        )
+        p3.metric(
+            "Energy Status",
+            str(forecast.energy_status),
+        )
+        p4.metric(
+            "Typical Forecast Error",
+            f"± {safe_number(LSTM_RMSE):.2f} kWh" if LSTM_RMSE is not None else "N/A",
+        )
+
+        st.caption(
+            "The uncertainty indicator is the selected model's held-out "
+            "test RMSE. It is not a guaranteed prediction interval."
+        )
+
+        st.download_button(
+            "Download all future forecasts",
+            future_forecasts.to_csv(index=False).encode("utf-8"),
+            "future_energy_forecasts.csv",
+            "text/csv",
+        )
+
+        captured = st.camera_input(
+            "Capture a current room image",
+            key="camera_capture",
+        )
+
+        uploaded = st.file_uploader(
+            "Or upload a CCTV / room image",
+            type=["jpg", "jpeg", "png"],
+            key="camera_image",
+        )
+
+        image_input = captured if captured is not None else uploaded
+
+        if image_input is not None:
+            # exif_transpose fixes the rotation tag that browser/phone camera
+            # captures carry (st.camera_input) but a manually chosen upload
+            # usually does not. Without this, a sideways/upside-down camera
+            # photo is fed to YOLO as-is and the person in it is missed,
+            # which is why camera capture kept showing "Empty room" while
+            # the same formula on an upload worked correctly.
+            image = ImageOps.exif_transpose(Image.open(image_input)).convert("RGB")
+
+            st.image(
+                image,
+                caption="Current room image",
+                width="stretch",
+            )
+
+            if st.button(
+                "Detect Human + Generate Recommendation",
+                type="primary",
+                key="detect_and_recommend",
+            ):
+                try:
+                    model = load_yolo_model()
+
+                    result = model.predict(
+                        image,
+                        conf=0.25,
+                        verbose=False,
+                    )[0]
+
+                    person_count = 0
+
+                    if result.boxes is not None and len(result.boxes) > 0:
+                        classes = result.boxes.cls
+                        if classes is None:
+                            person_count = len(result.boxes)
+                        else:
+                            person_class_ids = [
+                                int(x) for x in classes.tolist()
+                            ]
+                            person_count = sum(
+                                x == 0 for x in person_class_ids
+                            )
+
+                    person_present = int(person_count > 0)
+
+                    occupancy_level, occupancy_message = occupancy_advice(
+                        person_count,
+                        str(forecast.energy_status),
+                    )
+
+                    annotated = result.plot()
+
+                    st.image(
+                        annotated,
+                        caption=f"YOLO result: {person_count} person(s) detected",
+                        width="stretch",
+                    )
+
+                    baseline = safe_number(forecast.predicted_kwh)
+
+                    advice = []
+
+                    if str(forecast.energy_status) == "High":
+                        advice.append(
+                            "Predicted energy use is high: schedule "
+                            "non-essential loads outside peak periods."
+                        )
+
+                    advice.append(occupancy_message)
+
+                    a1, a2, a3 = st.columns(3)
+
+                    a1.metric("Person Count", person_count)
+                    a2.metric("Room Status", occupancy_level)
+                    a3.metric("Energy Status", str(forecast.energy_status))
+
+                    message = clear_yolo_recommendation(
+                        person_count,
+                        str(forecast.energy_status),
+                        baseline if "baseline" in locals() else safe_number(forecast.predicted_kwh),
+                    )
+
+                    st.subheader("💡 YOLO Human-Presence Recommendation")
+                    st.info(
+                        f"👤 Detected **{person_count} person(s)** | "
+                        f"Room status: **{occupancy_level}** | "
+                        f"Predicted energy: **{baseline:.2f} kWh** | "
+                        f"Energy status: **{forecast.energy_status}**"
+                    )
+
+                    if person_count == 0:
+                        st.warning(message)
+                    elif person_count >= 5:
+                        st.error(message)
+                    else:
+                        st.success(message)
+
+                    # -------------------------------------------------
+                    # Transparent energy-impact indicator
+                    # -------------------------------------------------
+                    if person_count == 0:
+                        saving_factor = 0.20
+                    elif person_count <= 2:
+                        saving_factor = 0.10
+                    elif person_count <= 4:
+                        saving_factor = 0.05
+                    else:
+                        saving_factor = 0.02
+
+                    potential_saving = baseline * saving_factor
+                    optimized_estimate = max(
+                        0.0,
+                        baseline - potential_saving,
+                    )
+
+                    st.divider()
+                    st.subheader("AI Energy Impact Scenario")
+
+                    i1, i2, i3 = st.columns(3)
+
+                    i1.metric(
+                        "Baseline Forecast",
+                        f"{baseline:.2f} kWh",
+                    )
+                    i2.metric(
+                        "Scenario Optimized",
+                        f"{optimized_estimate:.2f} kWh",
+                    )
+                    i3.metric(
+                        "Potential Saving",
+                        f"{potential_saving:.2f} kWh",
+                    )
+
+                    st.caption(
+                        "The optimized value is a rule-based scenario estimate "
+                        "derived from the detected human-presence state. It is "
+                        "not an independently measured saving and is not claimed "
+                        "as a direct output of the historical forecasting model."
+                    )
+
+                    # -------------------------------------------------
+                    # Save integrated event
+                    # -------------------------------------------------
+                    log_dir = REPORTS / "integration"
+                    log_dir.mkdir(exist_ok=True)
+
+                    event = pd.DataFrame(
+                        [
+                            {
+                                "event_time": datetime.now().isoformat(
+                                    timespec="seconds"
+                                ),
+                                "house_id": current_house,
+                                "forecast_date": forecast.forecast_date.date(),
+                                "predicted_kwh": baseline,
+                                "energy_status": forecast.energy_status,
+                                "person_present": person_present,
+                                "person_count": person_count,
+                                "occupancy_level": occupancy_level,
+                                "scenario_optimized_kwh": optimized_estimate,
+                                "potential_saving_kwh": potential_saving,
+                                "saving_percent": saving_factor * 100,
+                                "source_image": getattr(
+                                    image_input,
+                                    "name",
+                                    "camera_capture",
+                                ),
+                            }
+                        ]
+                    )
+
+                    log_path = (
+                        log_dir / "occupancy_energy_events.csv"
+                    )
+
+                    event.to_csv(
+                        log_path,
+                        mode="a",
+                        header=not log_path.exists(),
+                        index=False,
+                    )
+
+                    st.caption(
+                        f"Combined event saved: {log_path}"
+                    )
+
+                except Exception as exc:
+                    st.error(
+                        "YOLO detection failed. Check the YOLO model path "
+                        "and environment."
+                    )
+                    st.exception(exc)
+
+        else:
+            st.info(
+                "Upload or capture an image to create a real-time "
+                "occupancy + energy event."
+            )
+
+        event_path = (
+            REPORTS / "integration" / "occupancy_energy_events.csv"
+        )
+
+        if event_path.exists():
+            st.divider()
+            st.subheader("Recent Occupancy + Energy Events")
+
+            events = pd.read_csv(event_path)
+
+            if "event_time" in events.columns:
+                events = events.sort_values(
+                    "event_time",
+                    ascending=False,
+                )
+
+            st.dataframe(
+                events.head(10),
+                width="stretch",
+                hide_index=True,
+            )
+
+
+# =====================================================================
+# YOLO
+# =====================================================================
+with yolo:
+    st.subheader("🎯 YOLOv8 Person Detection")
+
+    if not yolo_metrics:
+        st.info(
+            "YOLO test metrics are not available yet."
+        )
+    else:
+        y1, y2, y3, y4 = st.columns(4)
+
+        y1.metric(
+            "Test Precision",
+            f"{safe_number(yolo_metrics.get('precision')):.3f}",
+        )
+        y2.metric(
+            "Test Recall",
+            f"{safe_number(yolo_metrics.get('recall')):.3f}",
+        )
+        y3.metric(
+            "Test mAP50",
+            f"{safe_number(yolo_metrics.get('mAP50')):.3f}",
+        )
+        y4.metric(
+            "Test mAP50-95",
+            f"{safe_number(yolo_metrics.get('mAP50_95')):.3f}",
+        )
+
+        st.caption(
+            f"Test set: {yolo_metrics.get('test_images', 0)} images, "
+            f"{yolo_metrics.get('test_person_instances', 0)} "
+            "annotated person instances."
+        )
+
+        st.divider()
+        st.subheader("💡 Human Detection → Energy Recommendation")
+        st.write(
+            "Upload a room image in **Live Energy + YOLO**. "
+            "YOLO counts people, determines the occupancy level, and combines "
+            "that result with the selected house energy forecast."
+        )
+        st.info(
+            "The recommendation is generated from two signals: "
+            "**human presence** + **predicted energy status**."
+        )
+        st.markdown(
+            "- **0 people:** switch off non-essential lights/devices after a safe delay.\n"
+            "- **1–2 people:** keep essential comfort and switch off idle loads.\n"
+            "- **3–4 people:** optimise AC/lighting while maintaining comfort.\n"
+            "- **5+ people:** keep ventilation/safety active and avoid unnecessary high-load equipment."
+        )
+
+        y5, y6 = st.columns(2)
+
+        with y5:
+            p = yolo_reports / "test_metrics" / "BoxPR_curve.png"
+            if p.exists():
+                st.image(
+                    str(p),
+                    caption="Precision–Recall Curve",
+                )
+
+            p = yolo_reports / "test_metrics" / "confusion_matrix_normalized.png"
+            if p.exists():
+                st.image(
+                    str(p),
+                    caption="Normalised Confusion Matrix",
+                )
+
+        with y6:
+            p = yolo_reports / "test_metrics" / "val_batch0_labels.jpg"
+            if p.exists():
+                st.image(
+                    str(p),
+                    caption="Ground-Truth Person Labels",
+                )
+
+            p = yolo_reports / "test_metrics" / "val_batch0_pred.jpg"
+            if p.exists():
+                st.image(
+                    str(p),
+                    caption="YOLOv8 Predicted Person Boxes",
+                )
+
+        st.success(
+            "YOLO human detection is evaluated separately on the held-out "
+            "test set. Live detections are then used as a current occupancy "
+            "signal for the operational energy-recommendation layer."
+        )

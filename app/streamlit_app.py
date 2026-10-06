@@ -6,11 +6,12 @@ import json
 from datetime import datetime
 
 import numpy as np
+import plotly.express as px
 import pandas as pd
 import streamlit as st
 import torch
 from torch import nn
-from PIL import Image, ImageOps
+from PIL import Image
 import matplotlib.pyplot as plt
 
 # ---------------------------------------------------------------------
@@ -29,6 +30,110 @@ st.set_page_config(
     page_icon="⚡",
     layout="wide",
 )
+
+# ---------- PREMIUM UI / LIGHTWEIGHT ANIMATION ----------
+st.markdown("""
+<style>
+/* Hero background */
+.hero-shell {
+    position: relative;
+    overflow: hidden;
+    border-radius: 24px;
+    padding: 34px 36px;
+    margin-bottom: 22px;
+    min-height: 205px;
+    background:
+        linear-gradient(115deg, rgba(10,28,52,.96), rgba(18,74,92,.90)),
+        radial-gradient(circle at 85% 20%, rgba(91,220,180,.35), transparent 30%);
+    box-shadow: 0 16px 40px rgba(8,30,45,.18);
+}
+.hero-shell:before {
+    content: "";
+    position: absolute;
+    width: 280px; height: 280px;
+    right: -70px; top: -110px;
+    border-radius: 50%;
+    border: 1px solid rgba(255,255,255,.18);
+    box-shadow: 0 0 0 28px rgba(255,255,255,.04),
+                0 0 0 58px rgba(255,255,255,.025);
+    animation: pulseRing 5s ease-in-out infinite;
+}
+.hero-shell:after {
+    content: "";
+    position: absolute;
+    left: -50px; bottom: -95px;
+    width: 230px; height: 230px;
+    border-radius: 50%;
+    background: rgba(255,255,255,.045);
+    animation: floatBlob 7s ease-in-out infinite;
+}
+.hero-content { position: relative; z-index: 2; }
+.hero-title {
+    color: #fff; font-size: 2.25rem; font-weight: 800;
+    letter-spacing: -.8px; margin: 0 0 8px 0;
+}
+.hero-subtitle {
+    color: rgba(255,255,255,.82); font-size: 1rem;
+    margin: 0; max-width: 780px;
+}
+.hero-chip {
+    display:inline-block; margin-top:18px; padding:7px 13px;
+    border-radius:999px; background:rgba(255,255,255,.12);
+    color:#fff; font-size:.82rem; border:1px solid rgba(255,255,255,.16);
+}
+.kpi-card {
+    padding: 18px 18px; border-radius: 18px;
+    background: rgba(255,255,255,.90);
+    border: 1px solid rgba(40,70,90,.10);
+    box-shadow: 0 8px 25px rgba(20,45,60,.08);
+    transition: transform .22s ease, box-shadow .22s ease;
+}
+.kpi-card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 14px 30px rgba(20,45,60,.14);
+}
+.section-card {
+    padding: 20px; border-radius: 20px;
+    background: rgba(255,255,255,.72);
+    border: 1px solid rgba(40,70,90,.09);
+    box-shadow: 0 7px 24px rgba(20,45,60,.06);
+    animation: fadeUp .45s ease both;
+}
+.reco-card {
+    padding: 18px 20px; border-radius: 16px; margin: 10px 0;
+    background: linear-gradient(135deg, rgba(255,248,226,.95), rgba(255,255,255,.92));
+    border-left: 5px solid #f2b84b;
+    box-shadow: 0 6px 20px rgba(40,50,40,.07);
+}
+@keyframes fadeUp {
+    from {opacity:0; transform:translateY(10px);}
+    to {opacity:1; transform:translateY(0);}
+}
+@keyframes floatBlob {
+    0%,100% {transform:translate(0,0);}
+    50% {transform:translate(22px,-12px);}
+}
+@keyframes pulseRing {
+    0%,100% {transform:scale(.96); opacity:.55;}
+    50% {transform:scale(1.04); opacity:1;}
+}
+/* Softer Streamlit chrome */
+div[data-testid="stMetric"] {
+    border-radius: 16px;
+    padding: 12px 14px;
+    background: rgba(255,255,255,.72);
+    border: 1px solid rgba(40,70,90,.08);
+}
+div[data-testid="stButton"] button {
+    border-radius: 12px;
+    transition: transform .18s ease, box-shadow .18s ease;
+}
+div[data-testid="stButton"] button:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 18px rgba(20,60,80,.12);
+}
+</style>
+""", unsafe_allow_html=True)
 
 st.markdown(
     """
@@ -51,6 +156,31 @@ st.markdown(
 # LOADERS
 # ---------------------------------------------------------------------
 @st.cache_data
+
+def premium_energy_donut(values, labels, title="Energy Status Distribution"):
+    fig = px.pie(
+        values=values,
+        names=labels,
+        hole=0.58,
+        title=title,
+        color_discrete_sequence=["#2E86DE", "#27AE60", "#F39C12", "#E74C3C", "#8E44AD"]
+    )
+    fig.update_traces(
+        textposition="inside",
+        textinfo="percent+label",
+        hovertemplate="%{label}<br>Records: %{value}<br>%{percent}<extra></extra>",
+        marker=dict(line=dict(color="white", width=2))
+    )
+    fig.update_layout(
+        height=360,
+        margin=dict(l=10,r=10,t=55,b=10),
+        showlegend=True,
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(size=13)
+    )
+    return fig
+
 def load_csv(name: str) -> pd.DataFrame:
     path = REPORTS / name
     if not path.exists():
@@ -626,6 +756,20 @@ else:
 # ---------------------------------------------------------------------
 # HEADER
 # ---------------------------------------------------------------------
+
+st.markdown("""
+<div class="hero-shell">
+  <div class="hero-content">
+    <div class="hero-title">⚡ AI Smart Building Energy Management</div>
+    <div class="hero-subtitle">
+      Intelligent energy forecasting, explainable insights, human-presence detection
+      and practical energy-saving recommendations in one dashboard.
+    </div>
+    <span class="hero-chip">● AI Forecasting &nbsp; • &nbsp; XAI &nbsp; • &nbsp; YOLOv8 &nbsp; • &nbsp; Smart Recommendations</span>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
 st.title("⚡ AI Smart Energy Management")
 st.caption(
     "Energy forecasting • Future projection • Explainable AI • "
@@ -1318,6 +1462,29 @@ with upload_tab:
             else:
                 st.info(msg)
 
+        
+        # Compact status distribution for the uploaded prediction result.
+        status_counts = result["energy_status"].value_counts()
+        if not status_counts.empty:
+            pc1, pc2 = st.columns([1, 1.7])
+            with pc1:
+                st.plotly_chart(
+                    premium_energy_donut(
+                        status_counts.values.tolist(),
+                        status_counts.index.tolist(),
+                        "Prediction Status"
+                    ),
+                    use_container_width=True
+                )
+            with pc2:
+                st.markdown(
+                    '<div class="section-card"><h4>📌 Prediction Insight</h4>'
+                    '<p>The donut chart summarizes the energy-status distribution '
+                    'for the uploaded records. Use Actual vs Predicted below to '
+                    'inspect the prediction behaviour.</p></div>',
+                    unsafe_allow_html=True
+                )
+
         st.subheader("📊 Actual vs Predicted")
 
         chart_df = result[
@@ -1333,14 +1500,14 @@ with upload_tab:
             chart_df["latest_actual_kwh"],
             width,
             label="Actual kWh",
-            color="#3498db"
+            color=["#2E86DE", "#5DADE2", "#85C1E9", "#AED6F1", "#1B4F72"]
         )
         ax.bar(
             x + width/2,
             chart_df["predicted_next_day_kwh"],
             width,
             label="Predicted Next-Day kWh",
-            color="#e74c3c"
+            color=["#E74C3C", "#EC7063", "#F1948A", "#CD6155", "#922B21"]
         )
 
         ax.set_xticks(x)
@@ -1449,13 +1616,7 @@ with live:
         image_input = captured if captured is not None else uploaded
 
         if image_input is not None:
-            # exif_transpose fixes the rotation tag that browser/phone camera
-            # captures carry (st.camera_input) but a manually chosen upload
-            # usually does not. Without this, a sideways/upside-down camera
-            # photo is fed to YOLO as-is and the person in it is missed,
-            # which is why camera capture kept showing "Empty room" while
-            # the same formula on an upload worked correctly.
-            image = ImageOps.exif_transpose(Image.open(image_input)).convert("RGB")
+            image = Image.open(image_input).convert("RGB")
 
             st.image(
                 image,
